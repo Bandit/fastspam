@@ -347,7 +347,7 @@ These go in `vars` in `wrangler.jsonc`.
 | `MAX_EMAILS_PER_RUN` | `300` | newest messages fetched per run |
 | `ALWAYS_REPORT` / `NEVER_REPORT` | empty | sender patterns, see [Rules](#rules) |
 | `SPAM_SCORE_SKIP_ABOVE` | empty | drop messages scoring above this without asking the model |
-| `SPAM_HEADERS` | `X-Spam-score,X-Spam-hits,X-Spam-status` | headers checked for a spam score |
+| `SPAM_HEADERS` | `X-Spam-score` | headers checked for a spam score |
 | `SPAM_MAILBOX` / `SENT_MAILBOX` | auto | mailbox name, path or id, if auto-detection fails |
 | `RESCUE_MAILBOX` | empty | see [Rescuing](#rescuing-optional) |
 | `RESCUE_BASIS` | `deterministic` | `deterministic` or `all` |
@@ -560,8 +560,9 @@ account; `npm run preview` shows what yours does:
 
 - **Spam score headers.** Fastmail doesn't document them. On a real account every message in
   Spam had `X-Spam-score` (a SpamAssassin-style number; the median was about 12) and
-  `X-Spam-hits` (the rules that fired); `X-Spam-status` was never present. `SPAM_HEADERS`
-  checks all three and ignores missing ones.
+  `X-Spam-hits` (the rules that fired); `X-Spam-status` was never present. Only the score is
+  used, so `SPAM_HEADERS` defaults to `X-Spam-score`. If your server puts the score in another
+  header, list it there; missing headers are ignored.
 - **Link format.** The default `FASTMAIL_LINK_TEMPLATE` is
   `https://app.fastmail.com/mail/{mailboxName}/{threadId}.{id}`, which hasn't been confirmed to
   open the message in Fastmail's web app.

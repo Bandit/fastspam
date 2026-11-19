@@ -16,6 +16,10 @@ describe("sanitise", () => {
   it("caps length by code point and marks truncation", () => {
     expect(clean("abcdefghij", 5)).toBe("abcd…");
     expect(Array.from(clean("😀".repeat(10), 4))).toHaveLength(4);
+    // Longer than max in UTF-16 units, but not in code points: kept whole.
+    expect(clean("😀".repeat(3), 4)).toBe("😀".repeat(3));
+    // Non-ASCII is still normalised to NFC.
+    expect(clean("Cafe\u0301", 10)).toBe("Caf\u00e9");
   });
   it("returns empty for non-strings", () => {
     expect(clean(undefined, 10)).toBe("");

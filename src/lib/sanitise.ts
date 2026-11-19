@@ -9,6 +9,8 @@ const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;
 // text render differently from what a model or a person reads.
 const INVISIBLE = /[؜­᠎​-‏‪-‮⁠-⁯﻿]/g;
 
+const ASCII = /^[\x00-\x7f]*$/;
+
 export const LIMITS = {
   subject: 200,
   name: 100,
@@ -19,7 +21,11 @@ export const LIMITS = {
 /** Single-line, visible-characters-only, at most `max` code points. */
 export function clean(value: unknown, max: number): string {
   if (typeof value !== "string") return "";
-  const s = value.normalize("NFC").replace(CONTROL, " ").replace(INVISIBLE, "").replace(/\s+/g, " ").trim();
+  // ASCII is already NFC; skipping normalize() for it saves real CPU per run.
+  const s = (ASCII.test(value) ? value : value.normalize("NFC")).replace(CONTROL, " ").replace(INVISIBLE, "").replace(/\s+/g, " ").trim();
+  // A string's UTF-16 length is never below its code-point count, so a short
+  // one can't need truncating and doesn't need splitting into code points.
+  if (s.length <= max) return s;
   const chars = Array.from(s);
   if (chars.length <= max) return s;
   return chars.slice(0, Math.max(0, max - 1)).join("").trimEnd() + "…";

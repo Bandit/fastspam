@@ -69,7 +69,10 @@ export async function updateIndex(
   const filter: Record<string, unknown> = { inMailbox: opts.sentId };
   if (!fresh) filter.after = new Date(Date.parse(index.updatedAt) - OVERLAP_MS).toISOString();
   const { ids } = await client.queryEmailIds(filter, opts.bootstrap);
-  const rows = (await client.getMany("Email/get", ids, ["id", "from", "to", "cc", "bcc", "receivedAt", "subject", "inReplyTo", "references"])) as SentRow[];
+  // `references` is not fetched: it was over a third of this response, and on a
+  // real account no Sent message was a reply by References alone (every one also
+  // had In-Reply-To or a reply subject). isReply still honours it when present.
+  const rows = (await client.getMany("Email/get", ids, ["id", "from", "to", "cc", "bcc", "receivedAt", "subject", "inReplyTo"])) as SentRow[];
 
   const self = new Set(index.self);
   let newest = Date.parse(index.updatedAt) || 0;

@@ -88,7 +88,11 @@ function str(v: unknown, fallback = ""): string {
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 
-export const DEFAULT_SPAM_HEADERS = ["X-Spam-score", "X-Spam-hits", "X-Spam-status"];
+/**
+ * Only the score is used. Fastmail also sets X-Spam-hits (the rules that fired),
+ * but nothing reads it, and fetching it was about a quarter of the Spam fetch.
+ */
+export const DEFAULT_SPAM_HEADERS = ["X-Spam-score"];
 export const DEFAULT_LINK_TEMPLATE = "https://app.fastmail.com/mail/{mailboxName}/{threadId}.{id}";
 
 /** "promotional:0.8, important:0.5" → per-tier overrides. Unknown tiers and bad numbers are ignored. */

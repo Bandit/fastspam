@@ -146,7 +146,7 @@ describe("correspondent index", () => {
       emails: [
         sentEmail("friend@mail.example", 10),
         sentReply("spammer@scam.example", "TS", 3),
-        sentEmail("refs@x.example", 3, undefined, undefined, { references: ["<a@b.example>"] }),
+        sentEmail("irt@x.example", 3, undefined, undefined, { inReplyTo: ["<a@b.example>"] }),
         sentEmail("subj@x.example", 3, undefined, undefined, { subject: "RE: invoice" }),
         sentEmail("aw@x.example", 3, undefined, undefined, { subject: "Aw: Termin" }),
       ],
