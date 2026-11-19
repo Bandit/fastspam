@@ -593,9 +593,10 @@ account; `npm run preview` shows what yours does:
   `X-Spam-hits` (the rules that fired); `X-Spam-status` was never present. Only the score is
   used, so `SPAM_HEADERS` defaults to `X-Spam-score`. If your server puts the score in another
   header, list it there; missing headers are ignored.
-- **Link format.** The default `FASTMAIL_LINK_TEMPLATE` is
-  `https://app.fastmail.com/mail/{mailboxName}/{threadId}.{id}`, which hasn't been confirmed to
-  open the message in Fastmail's web app.
+- **Link format.** Fastmail doesn't document its web app's URLs. The default
+  `FASTMAIL_LINK_TEMPLATE`, `https://app.fastmail.com/mail/{mailboxName}/{threadId}.{id}`, was
+  checked on a real account and opens the message (Fastmail adds its own `?u=` account
+  parameter on the way). If Fastmail changes its URLs, set the template to match, or to `""`.
 - **Clef through AI Gateway** works, although Clef's documentation doesn't mention it. Mind the
   billing note in [AI Gateway setup](#3-ai-gateway-optional-needed-for-the-google-and-openai-models).
 - **Gemini's answer envelope.** Through the Workers AI binding, Gemini Decision returns its
