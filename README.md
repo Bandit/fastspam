@@ -407,6 +407,10 @@ These go in `vars` in `wrangler.jsonc`.
 | `RESCUE_MAILBOX` | empty | see [Rescuing](#rescuing-optional) |
 | `RESCUE_BASIS` | `deterministic` | `deterministic` or `all` |
 | `MAX_RESCUES_PER_DIGEST` | `20` | most messages moved between two digests |
+| `INCOMING_MAILBOXES` | empty | folders to check for spam that got through; see [Incoming check](#incoming-check-experimental) |
+| `INCOMING_SKIP_READ` | `false` | don't check messages already marked read |
+| `INCOMING_THRESHOLD` | `0.7` | minimum P(spam) for the model to flag an incoming message |
+| `INCOMING_REPORT_MINUTES` | `60` | at most one incoming report per this many minutes |
 | `CORRESPONDENT_MAX` | `5000` | addresses kept in the index (most recent first) |
 | `SEND_WHEN_EMPTY` | `true` | send an "all clear" digest when there is nothing to report |
 | `SUBREQUEST_BUDGET` | `45` | subrequests per run; raise on Workers Paid |
@@ -454,6 +458,42 @@ This is the only change fastspam ever makes to mail, and it is deliberately narr
 By default (`RESCUE_BASIS=deterministic`), **only messages reported on a fact** are moved:
 `ALWAYS_REPORT`, someone you started a conversation with, or an existing conversation. Model judgements still
 appear in the digest, but they never move mail unless you set `RESCUE_BASIS=all`.
+
+## Incoming check (experimental)
+
+The Spam review in reverse: look at mail that *reached* your folders for spam, scams and phishing
+the filter missed, and email you a short report, at most hourly, when it finds any. Set
+`INCOMING_MAILBOXES` to turn it on:
+
+```
+INCOMING_MAILBOXES=Inbox, Lists/Newsletters
+INCOMING_SKIP_READ=true
+```
+
+Folders are names or paths, with `/` or `.` between levels. Spam can't be one of them.
+
+- **Read-only.** It never moves, flags or changes mail. The report is a list for you to judge.
+- **Facts first, as in Spam.** These settle a message without a model: you started a
+  conversation with the sender; DMARC proves it came from an organisation's domain you've
+  written to (never a webmail domain); it's in a conversation you wrote in; `ALWAYS_REPORT`;
+  your own addresses. Mail that fails DMARC from a domain whose policy says to quarantine or
+  reject it is flagged on that fact alone, as is a `NEVER_REPORT` sender. Only what's left
+  goes to the model, told that the messages came from the inbox.
+- **Flagged when the model is confident.** P(spam) at or above `INCOMING_THRESHOLD` (0.7).
+  Most incoming mail is legitimate, so the bar is higher than for the Spam review.
+- **Only new mail.** It starts with mail arriving after you turn it on, a few minutes behind
+  (the same settling delay as the Spam review).
+- **`INCOMING_SKIP_READ=true`** leaves out mail you've already read, on the basis that if you
+  read it and didn't mark it as spam, you've judged it. A find you read, move or delete before
+  the report goes out is left out of the report too.
+- fastspam's own digests and reports are recognised and skipped.
+- Each week's numbers (messages checked, messages flagged) appear in the weekly digest.
+
+On the author's mail, using `google/gemini-decision-1` at 0.7: of 58 messages that had got past
+the filter and were later moved to Spam by hand, 54 were flagged. None of 58 legitimate
+messages from cold senders were. The ones missed were launch announcements and a loan offer:
+unwanted rather than dangerous. A small sample; judge it on your own mail first with
+`node scripts/scan-incoming.mjs`, which runs the same check locally and changes nothing.
 
 ## Evaluation
 
@@ -608,11 +648,15 @@ any of them is reliable.
   `openai/decisions` send this data, through AI Gateway, to Google or OpenAI.
 - **In your KV namespace**: the addresses you've sent mail to and, separately, the ones you
   started a conversation with, each with the date you last did, and your own sending addresses.
-  Also how far the review of Sent and Spam has got, and the finds waiting for the next digest
-  (sender, subject, date and reason for each, as the digest will show them).
+  Also how far the review of Sent and Spam (and any incoming check) has got, and the finds
+  waiting for the next digest or incoming report (sender, subject, date and reason for each,
+  as the report will show them).
 - **In the digest**: the subject, sender and fastspam's reason for each reported message.
 - **Never**: message bodies beyond the preview, attachments, or anything from outside Spam
-  except your Sent recipients, and which conversations have messages outside Spam.
+  except your Sent recipients, and which conversations have messages outside Spam. The
+  exception is the [incoming check](#incoming-check-experimental), off by default: with it on,
+  the same fields for messages in `INCOMING_MAILBOXES` that no rule settled go to the model,
+  and the report lists the sender, subject and reason for each find.
 
 ## Known gaps
 

@@ -69,3 +69,14 @@ export function isoDate(d: Date, timezone: string): string {
   const p = localClock(timezone)(d.getTime());
   return `${p.y}-${String(p.m).padStart(2, "0")}-${String(p.d).padStart(2, "0")}`;
 }
+
+/** "Fri 20 Nov, 14:05" in `timezone`. Intl only for non-UTC zones, on first use. */
+export function timeFormatter(timezone: string): (t: number) => string {
+  const clock = localClock(timezone);
+  return (t) => {
+    const p = clock(t);
+    // Weekday from the local calendar date, which needs no Intl.
+    const weekday = WEEKDAY[new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay()];
+    return `${weekday} ${p.d} ${MONTH[p.m - 1]}, ${String(p.h).padStart(2, "0")}:${String(p.min).padStart(2, "0")}`;
+  };
+}

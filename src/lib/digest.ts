@@ -23,6 +23,8 @@ export interface RunStats {
   indexing?: { indexed: number; total: number | null };
   /** Finds left out because they had already left Spam. */
   leftSpam?: number;
+  /** The incoming check's week, when it is switched on. */
+  incoming?: { checked: number; flagged: number };
 }
 
 /** Everything the digest needs about a find; a full Suspect fits too. */
@@ -143,6 +145,10 @@ export function renderDigest(input: DigestInput): Message | null {
   }
   if (stats.leftSpam) {
     lines.push(`${stats.leftSpam} earlier find${stats.leftSpam === 1 ? " has" : "s have"} already left Spam and ${stats.leftSpam === 1 ? "isn't" : "aren't"} listed.`);
+  }
+  if (stats.incoming) {
+    const { checked, flagged } = stats.incoming;
+    lines.push(`Incoming check: ${checked} new message${checked === 1 ? "" : "s"} checked, ${flagged} flagged as possible spam (sent in the incoming reports).`);
   }
   for (const n of stats.notes) lines.push(`Note: ${n}`);
   if (stats.failures.length) {

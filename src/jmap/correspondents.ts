@@ -90,6 +90,12 @@ export interface CorrespondentLookup {
   repliedOnly(addr: string): boolean;
   /** true if you have sent to anyone at this domain (never for free webmail domains: see lib/freemail.ts) */
   domain(addr: string): boolean;
+  /**
+   * true if you have STARTED a conversation with someone at this domain (never
+   * for free webmail). Stricter than domain(): replying to a spammer doesn't
+   * make their domain known.
+   */
+  startedDomain(addr: string): boolean;
   isSelf(addr: string): boolean;
   self: ReadonlySet<string>;
 }
@@ -99,11 +105,13 @@ export function lookup(index: CorrespondentIndex | undefined): CorrespondentLook
   const addresses = usable?.addresses ?? {};
   const started = usable?.started ?? {};
   const domains = new Set(Object.keys(addresses).map(domainOf).filter((d) => d && !isFreemail(d)));
+  const startedDomains = new Set(Object.keys(started).map(domainOf).filter((d) => d && !isFreemail(d)));
   const self = new Set(usable?.self ?? []);
   return {
     started: (a) => (self.has(a) ? undefined : started[a]),
     repliedOnly: (a) => !self.has(a) && a in addresses && !(a in started),
     domain: (a) => !self.has(a) && domains.has(domainOf(a)),
+    startedDomain: (a) => !self.has(a) && startedDomains.has(domainOf(a)),
     isSelf: (a) => self.has(a),
     self,
   };

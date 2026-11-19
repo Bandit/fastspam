@@ -1,5 +1,7 @@
 import type { JmapClient } from "./client.ts";
 
+export const FASTSPAM_HEADER = "X-Fastspam";
+
 /**
  * Deliver the digest by creating it directly in the Inbox with Email/set
  * (RFC 8621 §4.6). Nothing is sent over SMTP, so there is no sender domain,
@@ -25,6 +27,8 @@ export async function appendToInbox(
             from: [{ name: "fastspam", email: msg.from || "fastspam@invalid" }],
             ...(msg.to.length ? { to: msg.to.map((email) => ({ email })) } : {}),
             subject: msg.subject,
+            // Lets a scan of incoming mail recognise fastspam's own reports.
+            [`header:${FASTSPAM_HEADER}:asText`]: "digest",
             bodyValues: { body: { value: msg.text } },
             textBody: [{ partId: "body", type: "text/plain" }],
           },

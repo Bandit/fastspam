@@ -60,6 +60,48 @@ export interface Edge {
   at: string;
 }
 
+/** Incoming mail that may be spam, waiting for the next incoming report. */
+export interface IncomingFind {
+  candidate: Pick<Candidate, "id" | "threadId" | "fromName" | "fromEmail" | "subject" | "receivedAt">;
+  /** The checked folder it was found in. */
+  mailboxId: string;
+  basis: "dmarc-policy" | "blocklist" | "model";
+  detail: string;
+  /** P(spam) from the model. */
+  pSpam?: number;
+}
+
+export interface IncomingStats {
+  checked: number;
+  settledByFact: number;
+  sentToModel: number;
+  modelCalls: number;
+  flagged: number;
+}
+
+/** The incoming check (experimental): its own position, finds and stats. */
+export interface IncomingState {
+  /** The folders and settings the position belongs to; a change starts afresh. */
+  key: string;
+  /** receivedAt of the newest message checked (ISO). */
+  cursor: string;
+  edge: Edge[];
+  pending: IncomingFind[];
+  /** Start of the period the next incoming report covers. */
+  periodStart: string;
+  /** When the last incoming report went out (unset: never, so the first find is reported at once). */
+  lastReportAt?: string;
+  reportFailedAt?: string;
+  /** Since the last incoming report. */
+  stats: IncomingStats;
+  /** Since the last weekly digest. */
+  week: IncomingStats;
+}
+
+export function emptyIncomingStats(): IncomingStats {
+  return { checked: 0, settledByFact: 0, sentToModel: 0, modelCalls: 0, flagged: 0 };
+}
+
 export interface JobState {
   v: 1;
   createdAt: string;
@@ -97,6 +139,8 @@ export interface JobState {
   rescueSkipped: { id: string; reason: string }[];
   rescuedThisPeriod: number;
   stats: PeriodStats;
+  /** Present once INCOMING_MAILBOXES is set. */
+  incoming?: IncomingState;
 }
 
 export function emptyStats(): PeriodStats {

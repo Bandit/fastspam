@@ -2,7 +2,7 @@ import type { AiBinding, QuestionStyle, Verdict } from "../types.ts";
 import type { Budget } from "../lib/budget.ts";
 import { ADAPTERS } from "./adapters.ts";
 import { makeBatches } from "./batch.ts";
-import { buildPayload, validateBinary, validateChoice, type Item, type RawBinary, type RawChoice } from "./classifier.ts";
+import { buildPayload, validateBinary, validateChoice, type Item, type RawBinary, type RawChoice, type ReviewContext } from "./classifier.ts";
 import { modelInfo } from "./models.ts";
 
 /** Subrequests kept back for what happens after classification. */
@@ -25,6 +25,8 @@ export interface ClassifyOptions {
   budget?: Budget;
   /** Injectable for tests; defaults to crypto.randomUUID. */
   nonce?: () => string;
+  /** What the model is told about where the messages came from. Default "junk". */
+  context?: ReviewContext;
 }
 
 export interface ClassifyResult {
@@ -117,7 +119,7 @@ export async function classify(ai: AiBinding | undefined, items: Item[], opts: C
   /** One call. Returns "exhausted" when the free allocation is used up. */
   const runBatch = async (batch: Item[]): Promise<"ok" | "exhausted"> => {
     const keys = batch.map((i) => i.key);
-    const request = adapter.buildRequest(opts.model, batch, buildPayload(batch, nonce()), style);
+    const request = adapter.buildRequest(opts.model, batch, buildPayload(batch, nonce(), opts.context), style);
     let output: unknown;
     const started = Date.now();
     const wait = opts.sleep ?? sleep;

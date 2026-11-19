@@ -77,6 +77,14 @@
     "RESCUE_BASIS": "deterministic",
     "MAX_RESCUES_PER_DIGEST": "20",
 
+    // Experimental: also check these folders for spam, scams and phishing
+    // the filter let through, and report finds at most every
+    // INCOMING_REPORT_MINUTES. Read-only. Empty = off (README "Incoming check").
+    "INCOMING_MAILBOXES": "",
+    "INCOMING_SKIP_READ": "false",
+    "INCOMING_THRESHOLD": "0.7",
+    "INCOMING_REPORT_MINUTES": "60",
+
     "SEND_WHEN_EMPTY": "true",
     // Workers Free allows 50 subrequests per run; raise on Workers Paid.
     "SUBREQUEST_BUDGET": "45"

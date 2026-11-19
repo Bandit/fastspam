@@ -58,6 +58,18 @@ export interface Config {
   rescueBasis: "deterministic" | "all";
   maxRescuesPerDigest: number;
 
+  /**
+   * Folders checked for spam the filter let through (experimental, read-only).
+   * Empty = off. Ids, names or paths; "." works as well as "/" between levels.
+   */
+  incomingMailboxes: string[];
+  /** Leave out incoming mail you've already read: you've judged it yourself. */
+  incomingSkipRead: boolean;
+  /** Flag an incoming message when the model puts P(spam) at or above this. */
+  incomingThreshold: number;
+  /** At most one incoming report per this many minutes, and only when something was found. */
+  incomingReportMinutes: number;
+
   correspondentMax: number;
   sendWhenEmpty: boolean;
   /** Subrequests this run may make (Workers Free allows 50 per invocation). */
@@ -169,6 +181,11 @@ export function loadConfig(env: Env): Config {
 
     rescueBasis: str(env.RESCUE_BASIS) === "all" ? "all" : "deterministic",
     maxRescuesPerDigest: clamp(Math.floor(num(env.MAX_RESCUES_PER_DIGEST, 20)), 0, 500),
+
+    incomingMailboxes: list(env.INCOMING_MAILBOXES),
+    incomingSkipRead: bool(env.INCOMING_SKIP_READ),
+    incomingThreshold: clamp(num(env.INCOMING_THRESHOLD, 0.7), 0.5, 1),
+    incomingReportMinutes: clamp(Math.floor(num(env.INCOMING_REPORT_MINUTES, 60)), 15, 10_080),
 
     correspondentMax: clamp(Math.floor(num(env.CORRESPONDENT_MAX, 5000)), 100, 100_000),
     sendWhenEmpty: bool(env.SEND_WHEN_EMPTY, true),

@@ -5,7 +5,10 @@ import { Budget } from "./lib/budget.ts";
 import { JmapClient, type FetchImpl, type Session } from "./jmap/client.ts";
 import { listMailboxes, mailboxPath, resolveMailbox, type Mailbox } from "./jmap/mailboxes.ts";
 import { emailProperties, toCandidate } from "./jmap/spam.ts";
-import { threadsWithRealMail } from "./jmap/threads.ts";
+import { threadsWithRealMail, threadsWithYourMail } from "./jmap/threads.ts";
+import { FASTSPAM_HEADER } from "./jmap/append.ts";
+import { decideIncoming } from "./incoming.ts";
+import { renderIncomingReport } from "./lib/incoming-report.ts";
 import { applySent, emptyIndex, lookup, SENT_PROPERTIES, type SentRow } from "./jmap/correspondents.ts";
 import { rescue } from "./jmap/rescue.ts";
 import { decide } from "./decide.ts";
@@ -14,6 +17,7 @@ import { isReported, type Item } from "./ai/classifier.ts";
 import { promptMessage } from "./ai/prompt.ts";
 import {
   addLines,
+  emptyIncomingStats,
   emptyStats,
   KEYS,
   newJob,
@@ -21,6 +25,8 @@ import {
   writeJson,
   type CorrespondentIndex,
   type Edge,
+  type IncomingFind,
+  type IncomingState,
   type JobState,
   type PendingSuspect,
 } from "./lib/state.ts";
@@ -62,6 +68,9 @@ const EDGE_MS = 1000;
 const SLICE_RESERVE = 12;
 const DIGEST_RETRY_MS = 60 * MINUTE;
 const MAX_PENDING = 500;
+/** Incoming messages checked per run, and finds kept for the next incoming report. */
+const INCOMING_SLICE = 40;
+const MAX_INCOMING_PENDING = 100;
 
 export interface RunOptions {
   fetchImpl?: FetchImpl;
@@ -99,6 +108,8 @@ export interface WorkReport {
   junkMailbox: string;
   /** FASTMAIL_LINK_TEMPLATE applied to a reviewed message, so the preview can check it opens. */
   sampleLink?: string;
+  /** The incoming check, when INCOMING_MAILBOXES is set and it ran. */
+  incoming?: { checked: number; settledByFact: number; sentToModel: number; modelCalls: number; flagged: number };
 }
 
 export interface DigestReport {
@@ -110,7 +121,17 @@ export interface DigestReport {
   subrequests: number;
 }
 
-export type RunReport = WorkReport | DigestReport;
+export interface IncomingReport {
+  kind: "incoming-report";
+  message: Message | null;
+  sent: boolean;
+  listed: number;
+  /** Finds left out because you had already moved, deleted or read them. */
+  dealtWith: number;
+  subrequests: number;
+}
+
+export type RunReport = WorkReport | DigestReport | IncomingReport;
 
 interface Context {
   env: Env;
@@ -171,12 +192,26 @@ export function digestTiming(job: JobState, config: Config, now: Date): { due: b
   return { due: !!job.nextDigestAt && Date.parse(job.nextDigestAt) <= now.getTime(), planned };
 }
 
-/** The scheduled entry point: the digest if one is due, otherwise a slice of work. */
+/**
+ * Whether this run should send the incoming report: something was found, and
+ * the last report (if any) was at least INCOMING_REPORT_MINUTES ago.
+ */
+export function incomingReportDue(job: JobState, config: Config, now: Date): boolean {
+  const inc = job.incoming;
+  if (!config.incomingMailboxes.length || !inc?.pending.length) return false;
+  const failedAt = inc.reportFailedAt ? Date.parse(inc.reportFailedAt) : NaN;
+  if (Number.isFinite(failedAt) && now.getTime() - failedAt < DIGEST_RETRY_MS) return false;
+  return !inc.lastReportAt || now.getTime() - Date.parse(inc.lastReportAt) >= config.incomingReportMinutes * MINUTE;
+}
+
+/** The scheduled entry point: the weekly digest if due, else the incoming report if due, else a slice of work. */
 export async function run(env: Env, now: Date, opts: RunOptions = {}): Promise<RunReport> {
   const ctx = context(env, opts);
   const job = await loadJob(ctx, now);
   const { due, planned } = digestTiming(job, ctx.config, now);
-  return due ? sendDigest(ctx, job, now) : doWork(ctx, job, now, planned);
+  if (due) return sendDigest(ctx, job, now);
+  if (incomingReportDue(job, ctx.config, now)) return sendIncomingReport(ctx, job, now);
+  return doWork(ctx, job, now, planned);
 }
 
 /** Work only (the preview script loops this). */
@@ -290,6 +325,16 @@ async function workSlices(ctx: Context, job: JobState, now: Date, dirty: boolean
     }
     return index;
   };
+
+  // The incoming check first: it's the time-sensitive part. A failure here is
+  // recorded and doesn't hold up the Spam review.
+  if (config.incomingMailboxes.length && job.sent.historyComplete) {
+    try {
+      if (await checkIncoming(ctx, job, b, now, report, loadIndex)) jobChanged = true;
+    } catch (err) {
+      report.failures.push(`incoming check failed: ${errorMessage(err)}`);
+    }
+  }
 
   while (report.slices < config.maxSlicesPerRun && budget.remaining >= SLICE_RESERVE) {
     report.slices++;
@@ -632,6 +677,7 @@ async function sendDigest(ctx: Context, job: JobState, now: Date): Promise<Diges
     backlog,
     indexing: job.sent.historyComplete ? undefined : { indexed: job.sent.historyIndexed, total: job.sent.historyTotal ?? null },
     leftSpam,
+    ...(config.incomingMailboxes.length && job.incoming ? { incoming: { checked: job.incoming.week.checked, flagged: job.incoming.week.flagged } } : {}),
   };
   const linker = makeLinker(config.linkTemplate, { accountId: session.accountId, mailboxId: junk.id, mailboxName: junk.name });
   const message = renderDigest({
@@ -664,9 +710,284 @@ async function sendDigest(ctx: Context, job: JobState, now: Date): Promise<Diges
   job.rescueSkipped = [];
   job.rescuedThisPeriod = 0;
   job.stats = emptyStats();
+  if (job.incoming) job.incoming.week = emptyIncomingStats();
   job.lastDigestAt = now.toISOString();
   planNextDigest(job, config, now.getTime());
   delete job.digestFailedAt;
+  await writeJson(ctx.kv, KEYS.job, job);
+  budget.charge();
+  report.subrequests = budget.used;
+  return report;
+}
+
+// ---------------------------------------------------------------- incoming
+
+/** INCOMING_MAILBOXES resolved. "Parent.Child" works as well as "Parent/Child". */
+export function incomingMailboxes(specs: string[], all: Mailbox[], junkId: string): Mailbox[] {
+  const found = specs.map((spec) => {
+    try {
+      return resolveMailbox(all, { label: "INCOMING_MAILBOXES", override: spec, required: true })!;
+    } catch (err) {
+      if (!spec.includes(".")) throw err;
+      return resolveMailbox(all, { label: "INCOMING_MAILBOXES", override: spec.replace(/\./g, "/"), required: true })!;
+    }
+  });
+  if (found.some((m) => m.id === junkId)) throw new Error("INCOMING_MAILBOXES must not include Spam: Spam is reviewed separately");
+  return [...new Map(found.map((m) => [m.id, m])).values()];
+}
+
+function newIncoming(key: string, cursor: string, now: Date, previous?: IncomingState): IncomingState {
+  return {
+    key,
+    cursor,
+    edge: [],
+    pending: previous?.pending ?? [],
+    periodStart: now.toISOString(),
+    ...(previous?.lastReportAt ? { lastReportAt: previous.lastReportAt } : {}),
+    stats: emptyIncomingStats(),
+    week: previous?.week ?? emptyIncomingStats(),
+  };
+}
+
+/**
+ * Check new mail in INCOMING_MAILBOXES for spam the filter let through:
+ * facts first (src/incoming.ts), then the model, told the messages came from
+ * the inbox. Read-only. Starts with mail arriving after it is switched on, and
+ * keeps its own position. Returns whether the job changed.
+ */
+async function checkIncoming(
+  ctx: Context,
+  job: JobState,
+  b: Boxes,
+  now: Date,
+  report: WorkReport,
+  loadIndex: () => Promise<CorrespondentIndex>,
+): Promise<boolean> {
+  const { config, client, budget, env } = ctx;
+  const folders = incomingMailboxes(config.incomingMailboxes, b.mailboxes, b.junk.id);
+  const key = JSON.stringify([folders.map((m) => m.id).sort(), config.incomingSkipRead]);
+  const settled = new Date(now.getTime() - SETTLE_MS).toISOString();
+  if (job.incoming?.key !== key) {
+    job.incoming = newIncoming(key, settled, now, job.incoming);
+    return true;
+  }
+  const inc = job.incoming;
+  const limit = INCOMING_SLICE + inc.edge.length;
+  const conditions: unknown[] = [
+    folders.length === 1 ? { inMailbox: folders[0]!.id } : { operator: "OR", conditions: folders.map((m) => ({ inMailbox: m.id })) },
+    { after: afterFilter(inc.cursor), before: settled },
+  ];
+  if (config.incomingSkipRead) conditions.push({ notKeyword: "$seen" });
+  const res = await client.request([
+    [
+      "Email/query",
+      {
+        accountId: b.session.accountId,
+        filter: { operator: "AND", conditions },
+        sort: [{ property: "receivedAt", isAscending: true }],
+        limit,
+      },
+      "iq",
+    ],
+    [
+      "Email/get",
+      {
+        accountId: b.session.accountId,
+        "#ids": { resultOf: "iq", name: "Email/query", path: "/ids" },
+        properties: [
+          ...emailProperties({ spamHeaders: config.spamHeaders, previewChars: config.previewChars }),
+          "mailboxIds",
+          `header:${FASTSPAM_HEADER}:asText`,
+        ],
+      },
+      "ig",
+    ],
+  ]);
+  const edgeIds = new Set(inc.edge.map((e) => e.id));
+  const rows = byQueryOrder(res.get("iq")?.ids, res.get("ig")?.list).filter((r) => !edgeIds.has(String(r.id)));
+  if (!rows.length) return false;
+
+  // fastspam's own reports: the Fastmail notifier marks them; the others are
+  // recognised by sender and subject.
+  const own = (r: Record<string, unknown>, c: Candidate) =>
+    !!r[`header:${FASTSPAM_HEADER}:asText`] || (!!config.emailFrom && c.fromEmail === config.emailFrom.toLowerCase() && c.subject.startsWith("[fastspam]"));
+  const all = rows.map((r) => ({ row: r, c: toCandidate(r, config) }));
+  const toCheck = all.filter((x) => !own(x.row, x.c));
+  const folderOf = (r: Record<string, unknown>) => folders.find((m) => (r.mailboxIds as Record<string, boolean> | undefined)?.[m.id])?.id ?? folders[0]!.id;
+
+  const correspondents = lookup(await loadIndex());
+  let threads = new Set<string>();
+  if (toCheck.length) {
+    try {
+      threads = await threadsWithYourMail(client, toCheck.map((x) => x.c.threadId), { sentId: b.sent.id, self: correspondents.self });
+    } catch (err) {
+      report.failures.push(`incoming: could not check conversations: ${errorMessage(err)}`);
+    }
+  }
+
+  const finds: IncomingFind[] = [];
+  const toModel: { x: (typeof toCheck)[number]; item: Item }[] = [];
+  for (const x of toCheck) {
+    const d = decideIncoming(x.c, {
+      alwaysReport: config.alwaysReport,
+      neverReport: config.neverReport,
+      honourDmarcPolicy: config.honourDmarcPolicy,
+      correspondents,
+      threadsWithYourMail: threads,
+    });
+    if (d.outcome === "flag") finds.push(incomingFind(x.c, folderOf(x.row), d.basis, d.detail));
+    else if (d.outcome === "model") {
+      toModel.push({
+        x,
+        item: {
+          key: `m${toModel.length}`,
+          message: promptMessage(x.c, {
+            now,
+            domainKnown: correspondents.domain(x.c.fromEmail),
+            repliedBefore: correspondents.repliedOnly(x.c.fromEmail),
+            previewChars: config.previewChars,
+          }),
+        },
+      });
+    }
+  }
+
+  const unanswered = new Set<string>();
+  let calls = 0;
+  if (toModel.length) {
+    const result = await classify(env.AI, toModel.map((t) => t.item), {
+      model: config.aiModel,
+      gatewayId: config.aiGatewayId,
+      batchSize: config.batchSize,
+      maxCalls: config.maxModelCallsPerRun,
+      contextTokens: config.modelContextTokens,
+      style: config.questionStyle,
+      budget,
+      context: "incoming",
+    });
+    calls = result.calls;
+    report.failures.push(...result.failures.map((f) => `incoming: ${f}`));
+    for (const t of toModel) {
+      const v = result.verdicts.get(t.item.key);
+      if (!v) {
+        unanswered.add(t.x.c.id);
+        continue;
+      }
+      const pSpam = Math.min(1, Math.max(0, 1 - v.notSpam));
+      if (pSpam >= config.incomingThreshold) {
+        finds.push({ ...incomingFind(t.x.c, folderOf(t.x.row), "model", "the model thinks this is spam"), pSpam });
+      }
+    }
+  }
+
+  // As in Spam: only the prefix before the first unanswered message counts.
+  const firstGap = all.findIndex((x) => unanswered.has(x.c.id));
+  const processed = firstGap < 0 ? all : all.slice(0, firstGap);
+  const done = new Set(processed.map((x) => x.c.id));
+  const checked = toCheck.filter((x) => done.has(x.c.id));
+  const flagged = finds.filter((f) => done.has(f.candidate.id));
+  const sentToModel = toModel.filter((t) => done.has(t.x.c.id)).length;
+  const settledHere = checked.length - sentToModel - flagged.filter((f) => f.basis !== "model").length;
+  for (const s of [inc.stats, inc.week]) {
+    s.checked += checked.length;
+    s.settledByFact += settledHere;
+    s.sentToModel += sentToModel;
+    s.modelCalls += calls;
+    s.flagged += flagged.length;
+  }
+  report.incoming = { checked: checked.length, settledByFact: settledHere, sentToModel, modelCalls: calls, flagged: flagged.length };
+
+  const pendingIds = new Set(inc.pending.map((p) => p.candidate.id));
+  for (const f of flagged) {
+    if (pendingIds.has(f.candidate.id) || inc.pending.length >= MAX_INCOMING_PENDING) continue;
+    inc.pending.push(f);
+  }
+  const moved = advance(
+    processed.map((x) => ({ id: x.c.id, receivedAt: x.c.receivedAt })),
+    inc.cursor,
+    inc.edge,
+  );
+  inc.cursor = moved.cursor ?? inc.cursor;
+  inc.edge = moved.edge;
+  return true;
+}
+
+function incomingFind(c: Candidate, mailboxId: string, basis: IncomingFind["basis"], detail: string): IncomingFind {
+  return {
+    candidate: { id: c.id, threadId: c.threadId, fromName: c.fromName, fromEmail: c.fromEmail, subject: c.subject, receivedAt: c.receivedAt },
+    mailboxId,
+    basis,
+    detail,
+  };
+}
+
+/** The incoming report: whatever was found since the last one, still where it was found. */
+async function sendIncomingReport(ctx: Context, job: JobState, now: Date): Promise<IncomingReport> {
+  const { config, client, budget } = ctx;
+  const inc = job.incoming!;
+  const b = await boxes(ctx);
+  let folders: Mailbox[];
+  try {
+    folders = incomingMailboxes(config.incomingMailboxes, b.mailboxes, b.junk.id);
+  } catch {
+    folders = b.mailboxes.filter((m) => inc.pending.some((p) => p.mailboxId === m.id));
+  }
+  const folderIds = new Set(folders.map((m) => m.id));
+
+  // Leave out what you've dealt with: moved out of the checked folders (to
+  // Spam, say), deleted, or (with INCOMING_SKIP_READ) read.
+  const current = (await client.getMany(
+    "Email/get",
+    inc.pending.map((p) => p.candidate.id),
+    ["id", "mailboxIds", "keywords"],
+  )) as { id: string; mailboxIds?: Record<string, boolean>; keywords?: Record<string, boolean> }[];
+  const live = new Map(current.map((e) => [e.id, e]));
+  const finds = inc.pending.filter((p) => {
+    const e = live.get(p.candidate.id);
+    if (!e || !Object.keys(e.mailboxIds ?? {}).some((id) => folderIds.has(id))) return false;
+    return !(config.incomingSkipRead && e.keywords?.$seen);
+  });
+  const dealtWith = inc.pending.length - finds.length;
+  const report: IncomingReport = { kind: "incoming-report", message: null, sent: false, listed: finds.length, dealtWith, subrequests: budget.used };
+
+  if (finds.length) {
+    const path = (id: string) => {
+      const m = b.mailboxes.find((x) => x.id === id);
+      return m ? mailboxPath(m, b.mailboxes) : "(folder)";
+    };
+    report.message = renderIncomingReport({
+      finds,
+      stats: inc.stats,
+      since: new Date(inc.periodStart),
+      now,
+      timezone: config.timezone,
+      folderName: path,
+      dealtWith,
+      link: (f) => {
+        const m = b.mailboxes.find((x) => x.id === f.mailboxId);
+        return makeLinker(config.linkTemplate, { accountId: b.session.accountId, mailboxId: f.mailboxId, mailboxName: m?.name ?? "" })(f.candidate);
+      },
+    });
+  }
+  if (ctx.opts.readOnly) return report;
+
+  if (report.message) {
+    try {
+      await makeNotifier(ctx.env, config, ctx.opts, budget).send(report.message);
+    } catch (err) {
+      inc.reportFailedAt = now.toISOString();
+      addLines(job.stats.failures, [`an incoming report could not be sent: ${errorMessage(err)}`]);
+      await writeJson(ctx.kv, KEYS.job, job);
+      throw err;
+    }
+    report.sent = true;
+    inc.stats = emptyIncomingStats();
+    inc.periodStart = now.toISOString();
+    inc.lastReportAt = now.toISOString();
+  }
+  // Nothing left to report (you dealt with it all) also clears the list.
+  inc.pending = [];
+  delete inc.reportFailedAt;
   await writeJson(ctx.kv, KEYS.job, job);
   budget.charge();
   report.subrequests = budget.used;

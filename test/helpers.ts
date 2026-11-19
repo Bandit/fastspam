@@ -53,9 +53,28 @@ export interface FakeEmail {
   references?: string[] | null;
   /** lower-cased header name → instances, topmost first */
   headers?: Record<string, string[]>;
+  keywords?: Record<string, boolean>;
 }
 
-export const MAILBOXES = [
+type Filter = { operator?: "AND" | "OR" | "NOT"; conditions?: Filter[]; inMailbox?: string; after?: string; before?: string; notKeyword?: string; hasKeyword?: string };
+
+/** RFC 8621 Email/query filters: conditions, nested AND/OR/NOT, `after` inclusive, `before` strict. */
+function matches(e: FakeEmail, f: Filter | undefined): boolean {
+  if (!f) return true;
+  if (f.operator) {
+    const parts = (f.conditions ?? []).map((c) => matches(e, c));
+    return f.operator === "AND" ? parts.every(Boolean) : f.operator === "OR" ? parts.some(Boolean) : !parts.some(Boolean);
+  }
+  return (
+    (!f.inMailbox || !!e.mailboxIds[f.inMailbox]) &&
+    (!f.after || e.receivedAt >= f.after) &&
+    (!f.before || e.receivedAt < f.before) &&
+    (!f.notKeyword || !e.keywords?.[f.notKeyword]) &&
+    (!f.hasKeyword || !!e.keywords?.[f.hasKeyword])
+  );
+}
+
+export const MAILBOXES: { id: string; name: string; role: string | null; parentId: string | null }[] = [
   { id: "mb-inbox", name: "Inbox", role: "inbox", parentId: null },
   { id: "mb-junk", name: "Spam", role: "junk", parentId: null },
   { id: "mb-sent", name: "Sent", role: "sent", parentId: null },
@@ -163,10 +182,7 @@ export class FakeJmap {
       }
       case "Email/query": {
         // RFC 8621: `after` is inclusive, `before` is strict.
-        const f = args.filter as { inMailbox?: string; after?: string; before?: string };
-        let list = this.emails.filter(
-          (e) => (!f.inMailbox || e.mailboxIds[f.inMailbox]) && (!f.after || e.receivedAt >= f.after) && (!f.before || e.receivedAt < f.before),
-        );
+        let list = this.emails.filter((e) => matches(e, args.filter as Filter | undefined));
         const ascending = (args.sort as { isAscending?: boolean }[] | undefined)?.[0]?.isAscending === true;
         // Stable, so equal timestamps keep insertion order.
         list = [...list].sort((a, b) => (ascending ? a.receivedAt.localeCompare(b.receivedAt) : b.receivedAt.localeCompare(a.receivedAt)));
