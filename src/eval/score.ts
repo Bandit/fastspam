@@ -11,7 +11,7 @@ import { isReported, notSpam } from "../ai/classifier.ts";
 import type { EvalFixture } from "./fixtures.ts";
 
 /** Bump when fixtures, criteria wording, the prompt or scoring change. Scores from different versions are not comparable. */
-export const SUITE_VERSION = "2026-11-19.4";
+export const SUITE_VERSION = "2026-11-20.1";
 
 export const THRESHOLDS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
 

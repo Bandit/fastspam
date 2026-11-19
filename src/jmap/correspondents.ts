@@ -1,5 +1,6 @@
 import type { CorrespondentIndex } from "../lib/state.ts";
 import { cleanAddress, domainOf } from "../lib/sanitise.ts";
+import { isFreemail } from "../lib/freemail.ts";
 
 /**
  * The "have you written to them?" index, built from your Sent mail a page at a
@@ -87,7 +88,7 @@ export interface CorrespondentLookup {
   started(addr: string): number | undefined;
   /** true if you have written to this exact address, but only ever in reply */
   repliedOnly(addr: string): boolean;
-  /** true if you have sent to anyone at this domain */
+  /** true if you have sent to anyone at this domain (never for free webmail domains: see lib/freemail.ts) */
   domain(addr: string): boolean;
   isSelf(addr: string): boolean;
   self: ReadonlySet<string>;
@@ -97,7 +98,7 @@ export function lookup(index: CorrespondentIndex | undefined): CorrespondentLook
   const usable = index?.v === 3 ? index : undefined;
   const addresses = usable?.addresses ?? {};
   const started = usable?.started ?? {};
-  const domains = new Set(Object.keys(addresses).map(domainOf).filter(Boolean));
+  const domains = new Set(Object.keys(addresses).map(domainOf).filter((d) => d && !isFreemail(d)));
   const self = new Set(usable?.self ?? []);
   return {
     started: (a) => (self.has(a) ? undefined : started[a]),

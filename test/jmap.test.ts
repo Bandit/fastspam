@@ -5,6 +5,7 @@ import { emailProperties, fetchCandidates } from "../src/jmap/spam.ts";
 import { threadsWithRealMail } from "../src/jmap/threads.ts";
 import { applySent, emptyIndex, isReply, lookup, SENT_PROPERTIES, type SentRow } from "../src/jmap/correspondents.ts";
 import { rescue } from "../src/jmap/rescue.ts";
+import { isFreemail } from "../src/lib/freemail.ts";
 import { appendToInbox } from "../src/jmap/append.ts";
 import { Budget } from "../src/lib/budget.ts";
 import { FakeJmap, MAILBOXES, sentEmail, sentReply, spamEmail } from "./helpers.ts";
@@ -180,6 +181,21 @@ describe("correspondent index", () => {
   it("keeps only the most recent addresses", () => {
     const index = applySent({ v: 3, addresses: { "a@x.example": 1, "b@x.example": 2 }, started: {}, self: [] }, rows([sentEmail("new@x.example", 1, undefined, now)]), 2);
     expect(Object.keys(index.addresses).sort()).toEqual(["b@x.example", "new@x.example"]);
+  });
+  it("never treats a free webmail domain as known, but still knows the exact address", () => {
+    // Built at runtime: the domains have to be real providers here, and the
+    // privacy test rightly rejects literal addresses on real domains.
+    const at = (local: string, domain: string) => [local, domain].join("@");
+    const index = applySent(emptyIndex(), rows([sentEmail(at("friend", "gmail.com"), 5), sentEmail(at("pal", "hotmail.co.uk"), 5), sentEmail("colleague@work.example", 5)]), 1000);
+    const l = lookup(index);
+    expect(l.domain(at("stranger", "gmail.com"))).toBe(false);
+    expect(l.domain(at("stranger", "hotmail.co.uk"))).toBe(false);
+    expect(l.domain("stranger@work.example")).toBe(true);
+    expect(l.started(at("friend", "gmail.com"))).toBeTypeOf("number");
+  });
+  it("recognises free webmail domains", () => {
+    for (const d of ["gmail.com", "Outlook.com", "hotmail.co.uk", "yahoo.com.au", "live.com", "gmx.de", "icloud.com", "proton.me", "fastmail.com"]) expect(isFreemail(d)).toBe(true);
+    for (const d of ["work.example", "outlook.example", "mygmail.com", "yahoo.example.com", "company.co.uk"]) expect(isFreemail(d)).toBe(false);
   });
   it("ignores an index in an older format", () => {
     const old = { v: 2, updatedAt: "", addresses: { "x@x.example": 1 }, started: { "x@x.example": 1 }, self: [] } as unknown as Parameters<typeof lookup>[0];

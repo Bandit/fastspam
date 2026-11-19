@@ -599,7 +599,8 @@ any of them is reliable.
 ## Privacy: what goes where
 
 - **To the model**: for messages that no rule settled, the sender's name and address, the
-  subject, the message's age, whether you've emailed anyone at the sender's domain, whether
+  subject, the message's age, whether you've emailed anyone at the sender's domain (never set
+  for free webmail domains such as gmail.com, where it would mean nothing), whether
   you've replied to this sender before, the spam
   score and SPF/DKIM/DMARC results if present, and the first `PREVIEW_CHARS` (200) characters
   of the body. Set `PREVIEW_CHARS=0` to send no body text; the body preview is then not even
