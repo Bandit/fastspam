@@ -84,7 +84,7 @@ export class JmapClient {
     };
     const accountId = raw.primaryAccounts?.[MAIL];
     if (!accountId) {
-      throw new JmapAuthError("the Fastmail token has no mail account: create it with mail read access (Read-only access, or Email)");
+      throw new JmapAuthError("the Fastmail token has no mail account: create it with the Email scope ticked (and Read-only access on, for FASTMAIL_TOKEN)");
     }
     if (typeof raw.apiUrl !== "string" || !raw.apiUrl.startsWith("https://")) {
       throw new JmapError("JMAP session has no https apiUrl");

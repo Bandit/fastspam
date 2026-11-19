@@ -200,8 +200,8 @@ npx wrangler login
 ### 1. Fastmail token (read-only)
 
 In Fastmail: **Settings → Privacy & Security → Manage API tokens → New API token**. Give it a
-name, choose type **JMAP**, choose scope **Read-only access**, and generate it. Copy it; you
-won't see it again.
+name, choose protocol **JMAP**, turn on **Read-only access**, tick the **Email** scope and
+nothing else, and generate it. Copy it; you won't see it again.
 
 ```bash
 npx wrangler secret put FASTMAIL_TOKEN
@@ -215,7 +215,9 @@ Set `NOTIFIER` in `wrangler.jsonc` to one of these:
 
 - **`fastmail`** (default). The digest is created directly in your Inbox over JMAP. Nothing is
   sent by email, so there is no sending domain or deliverability to set up. This needs a
-  **second** token with the **Email** scope, which is used for nothing else:
+  **second** token: protocol **JMAP**, **Read-only access** off, and the **Email** scope only.
+  It is used for nothing else. It doesn't need **Email submission**, which is for sending mail
+  as you; fastspam never sends mail, it only creates the digest in your Inbox:
   ```bash
   npx wrangler secret put FASTMAIL_WRITE_TOKEN
   ```
@@ -272,16 +274,33 @@ settings are visible in the dashboard: those stay as `wrangler secret put`. It a
 arguments go to wrangler, so `npm run deploy -- --dry-run --outdir dist` shows what would be
 deployed.
 
-The first deploy creates the `FASTSPAM_STATE` KV namespace for you. Set `TIMEZONE` in
-`wrangler.jsonc` to your own (for example `Europe/London`) so the digest shows local dates.
+The first deploy creates the `FASTSPAM_STATE` KV namespace for you. Set `TIMEZONE` (for
+example `Europe/London`) so the digest goes out at your local time and shows local dates. See
+[Limits](#limits) for the one cost of a timezone other than UTC on Workers Free.
 
 ### Schedule
 
-The cron in `wrangler.jsonc` is `0 20 * * 1`: Mondays at 20:00 **UTC**. Cron Triggers only run
-in UTC, so choose the UTC time that suits you. If your timezone uses daylight saving, the local
-time will move by an hour twice a year. Any cadence works: fastspam remembers which messages it
-has already reviewed, and always looks back `LOOKBACK_DAYS` (14). So a weekly run gets two
-chances at any message the model couldn't classify the first time.
+One cron runs every 15 minutes (`*/15 * * * *` in `wrangler.jsonc`). Each run does one of two
+things:
+
+- **If a digest is due, it sends the digest.** The digest goes out at `DIGEST_HOUR` (20) on
+  `DIGEST_DAYS` (`mon`) in `TIMEZONE`. Because this is worked out in code rather than by cron
+  (which only knows UTC), the time stays put across daylight-saving changes. A run that misses
+  the time, or fails to send, is caught up by a later run; a failed send is retried at most
+  hourly. A new installation sends its first digest at the first digest time after it starts.
+- **Otherwise it does one small slice of work**, sized to fit the Workers Free CPU limit:
+  1. **Indexing Sent, newest first, `SENT_PAGE` (200) messages per run**, until all of it is
+     indexed. Nothing in Spam is reviewed until then, because a message reviewed early would
+     miss the "you started a conversation with them" fact.
+  2. **Reviewing Spam, oldest first, `SPAM_SLICE` (40) messages per run**, from a saved
+     position. The first pass covers everything already in Spam (or the last `BACKLOG_DAYS`), so
+     the messages closest to automatic deletion are reviewed first. Once it reaches the present,
+     each run reviews whatever has arrived since. Finds are kept until the next digest. Mail from
+     the last ten minutes is left for the next run, in case it isn't visible to searches yet.
+
+A run with nothing to do reads one KV value, asks Fastmail if anything is new, and stops.
+While the first passes are running, the digest shows how far they have got. On Workers Paid,
+`MAX_SLICES_PER_RUN` lets one run do several slices.
 
 ## First run: preview
 
@@ -298,7 +317,9 @@ Fill in `FASTMAIL_TOKEN` in `.dev.vars`, then run:
 npm run preview
 ```
 
-It prints the digest, along with the facts needed to tune fastspam:
+It indexes all of Sent and reviews the last 14 days of Spam in one go (`-- --days 30` for
+more, `-- --days all` for everything), then prints the digest, along with the facts needed to
+tune fastspam:
 
 - **Spam headers.** Which of `SPAM_HEADERS` Fastmail actually sets on your mail, and the
   spread of spam scores. Use this before setting `SPAM_SCORE_SKIP_ABOVE`. If no scores are
@@ -343,18 +364,20 @@ These go in `vars` in `wrangler.jsonc`.
 | `MAX_MODEL_CALLS_PER_RUN` | `16` | cap on model calls; the rest are retried next run |
 | `MODEL_CONTEXT_TOKENS` | per model | override the context size used to split batches |
 | `PREVIEW_CHARS` | `200` | characters of body text sent to the model; `0` never fetches the body |
-| `LOOKBACK_DAYS` | `14` | how far back each run looks in Spam |
-| `MAX_EMAILS_PER_RUN` | `300` | newest messages fetched per run |
+| `DIGEST_DAYS` | `mon` | digest days in `TIMEZONE`: `mon`, `mon,thu`, or `daily` |
+| `DIGEST_HOUR` | `20` | digest hour (0–23) in `TIMEZONE` |
+| `SPAM_SLICE` | `40` | Spam messages reviewed per run |
+| `SENT_PAGE` | `200` | Sent messages indexed per run |
+| `MAX_SLICES_PER_RUN` | `1` | slices of work per run; raise on Workers Paid to catch up faster |
+| `BACKLOG_DAYS` | empty | how far back the first pass through Spam starts; empty = all of it |
 | `ALWAYS_REPORT` / `NEVER_REPORT` | empty | sender patterns, see [Rules](#rules) |
 | `SPAM_SCORE_SKIP_ABOVE` | empty | drop messages scoring above this without asking the model |
 | `SPAM_HEADERS` | `X-Spam-score` | headers checked for a spam score |
 | `SPAM_MAILBOX` / `SENT_MAILBOX` | auto | mailbox name, path or id, if auto-detection fails |
 | `RESCUE_MAILBOX` | empty | see [Rescuing](#rescuing-optional) |
 | `RESCUE_BASIS` | `deterministic` | `deterministic` or `all` |
-| `MAX_RESCUES_PER_RUN` | `20` | most messages moved in one run |
-| `CORRESPONDENT_BOOTSTRAP` | `2000` | Sent messages indexed on the first run |
+| `MAX_RESCUES_PER_DIGEST` | `20` | most messages moved between two digests |
 | `CORRESPONDENT_MAX` | `5000` | addresses kept in the index (most recent first) |
-| `FORGET_AFTER_DAYS` | `60` | how long a reviewed message id is remembered |
 | `SEND_WHEN_EMPTY` | `true` | send an "all clear" digest when there is nothing to report |
 | `SUBREQUEST_BUDGET` | `45` | subrequests per run; raise on Workers Paid |
 | `FASTMAIL_LINK_TEMPLATE` | see below | `{id}` `{threadId}` `{mailboxId}` `{mailboxName}` `{accountId}`; `""` for no links |
@@ -383,7 +406,8 @@ To change a setting for your own deployment without editing `wrangler.jsonc`, pu
 
 Set `RESCUE_MAILBOX` to a mailbox name (for example `Rescued`; create it in Fastmail first),
 and set `FASTMAIL_WRITE_TOKEN`. fastspam will then move suspects out of Spam into that
-mailbox, so they survive Spam's automatic deletion even if you don't read the digest in time.
+mailbox as each slice is reviewed, so they survive Spam's automatic deletion even if you don't
+read the digest in time.
 
 This is the only change fastspam ever makes to mail, and it is deliberately narrow:
 
@@ -393,7 +417,7 @@ This is the only change fastspam ever makes to mail, and it is deliberately narr
 - Only the message's Spam membership is changed: it is removed from Spam and added to
   `RESCUE_MAILBOX`. Its other folders and its flags are left alone.
 - Nothing is ever deleted. There is no delete call anywhere in the code.
-- At most `MAX_RESCUES_PER_RUN` (20) messages are moved per run.
+- At most `MAX_RESCUES_PER_DIGEST` (20) messages are moved between two digests.
 - The write token must belong to the same Fastmail account as the read-only token, or nothing
   is moved.
 
@@ -524,18 +548,23 @@ any of them is reliable.
 ## Limits
 
 - **Workers Free gives a cron run only 10 ms of CPU time.** Time spent waiting on the network
-  doesn't count, but reading hundreds of messages does. The first run, which indexes 2,000 Sent
-  messages, is the heaviest. On Workers Free, lower `MAX_EMAILS_PER_RUN` and
-  `CORRESPONDENT_BOOTSTRAP` and check the run's CPU time in the dashboard. Workers Paid
-  ($5/month) allows 15 minutes for weekly crons and is the realistic home for fastspam.
+  doesn't count; reading and deciding about messages does. That is why work is split into
+  slices. Measured locally on a real account (a fast desktop CPU, so expect a Worker to be
+  slower), one run took about 4 ms for a page of 200 Sent messages and about 2 ms warm, 8 ms in
+  a brand-new process, for a slice of 40 Spam messages. Check the CPU time of your runs in the
+  dashboard, and lower `SPAM_SLICE` or `SENT_PAGE` if they come close to the limit. Workers
+  Paid ($5/month) allows far more, and `MAX_SLICES_PER_RUN` uses it.
+- **A `TIMEZONE` other than UTC costs CPU on the digest run.** Converting times to a timezone
+  loads timezone data on first use, which took about 7 ms in a new process. fastspam avoids it
+  everywhere except where a local time is genuinely needed: working out the next digest time
+  (once per digest) and the dates shown in the digest. In UTC it is never loaded.
 - **Subrequests: Workers Free allows 50 per run** (Paid: 10,000). KV operations count. It isn't
   documented whether Workers AI calls count, so fastspam counts them. `SUBREQUEST_BUDGET` (45)
-  is enforced. When the budget runs low, model calls stop early, and the remaining messages are
-  retried next run. In the test suite, a first run over 60 spam messages (4 model calls, plus
-  indexing 2,000 Sent messages) used 17–19 subrequests depending on the notifier, and later
-  weekly runs 12–14.
-- With a lot of spam, only the newest `MAX_EMAILS_PER_RUN` messages in the window are fetched,
-  and the digest says so.
+  is enforced. A slice of Spam needs about 10–15. If the model can't be reached or the budget
+  runs out, the slice stops at the first message the model couldn't answer, and the next run
+  starts again from there.
+- **Workers Free allows 1,000 KV writes a day.** A run writes at most two values, and a run with
+  nothing to do writes none, so a 15-minute schedule uses at most about 200.
 
 ## Privacy: what goes where
 
@@ -546,9 +575,10 @@ any of them is reliable.
   of the body. Set `PREVIEW_CHARS=0` to send no body text; the body preview is then not even
   fetched. Clef runs on Workers AI inside Cloudflare. `google/gemini-decision-1` and
   `openai/decisions` send this data, through AI Gateway, to Google or OpenAI.
-- **In your KV namespace**: the ids of messages already reviewed (for `FORGET_AFTER_DAYS`), the
-  addresses you've sent mail to and, separately, the ones you started a conversation with, each
-  with the date you last did, your own sending addresses, and the time of the last run.
+- **In your KV namespace**: the addresses you've sent mail to and, separately, the ones you
+  started a conversation with, each with the date you last did, and your own sending addresses.
+  Also how far the review of Sent and Spam has got, and the finds waiting for the next digest
+  (sender, subject, date and reason for each, as the digest will show them).
 - **In the digest**: the subject, sender and fastspam's reason for each reported message.
 - **Never**: message bodies beyond the preview, attachments, or anything from outside Spam
   except your Sent recipients, and which conversations have messages outside Spam.

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { clean, cleanAddress, domainOf } from "../src/lib/sanitise.ts";
 import { matchesAny, matchesPattern } from "../src/lib/match.ts";
 import { firstHeader, isValidHeaderName, parseAuthResults, parseSpamScore } from "../src/lib/headers.ts";
-import { pruneReviewed } from "../src/lib/state.ts";
+import { addLines } from "../src/lib/state.ts";
 import { Budget, BudgetExceededError } from "../src/lib/budget.ts";
 
 describe("sanitise", () => {
@@ -100,9 +100,12 @@ describe("headers", () => {
 });
 
 describe("state and budget", () => {
-  it("prunes reviewed ids older than the retention window", () => {
-    const now = 100 * 86_400_000;
-    expect(pruneReviewed({ old: now - 61 * 86_400_000, recent: now - 1 }, now, 60)).toEqual({ recent: now - 1 });
+  it("keeps failure and note lines deduplicated and capped", () => {
+    const lines: string[] = [];
+    addLines(lines, ["a", "a", "b"]);
+    expect(lines).toEqual(["a", "b"]);
+    addLines(lines, Array.from({ length: 50 }, (_, i) => `x${i}`));
+    expect(lines).toHaveLength(20);
   });
   it("enforces the subrequest budget but lets charge() count past it", () => {
     const b = new Budget(2);

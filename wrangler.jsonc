@@ -7,18 +7,19 @@
   "workers_dev": false,
   "preview_urls": false,
   "triggers": {
-    // Weekly, Monday 20:00 UTC. Cron Triggers only run in UTC: pick the hour
-    // that suits your timezone (README "Schedule").
-    "crons": ["0 20 * * 1"]
+    // Every 15 minutes. Each run sends the digest if one is due (DIGEST_DAYS
+    // and DIGEST_HOUR below) and otherwise does one small slice of work, which
+    // keeps every run inside the Workers Free CPU limit (README "Schedule").
+    "crons": ["*/15 * * * *"]
   },
   "ai": {
     "binding": "AI"
   },
   "kv_namespaces": [
     // Dashboard name: "fastspam-state" (Storage & Databases → KV).
-    // Holds reviewed message ids, the Sent-recipient index and the last run
-    // time. Safe to delete: worst case, the last LOOKBACK_DAYS of Spam is
-    // reviewed again and the index is rebuilt.
+    // Holds progress through Sent and Spam, finds waiting for the digest, and
+    // the Sent-recipient index. Safe to delete: the index is rebuilt and Spam
+    // is reviewed again from the start, so finds may be reported twice.
     // No id: `wrangler deploy` creates the namespace on first deploy and reuses
     // it after that, so nothing account-specific is committed. (An id is not a
     // secret, but leaving it out keeps forks deployable as-is.)
@@ -34,8 +35,12 @@
     "DRY_RUN": "false",
     // "fastmail" (needs FASTMAIL_WRITE_TOKEN), "postmark" or "cloudflare"
     "NOTIFIER": "fastmail",
-    // IANA timezone for dates in the digest
+    // IANA timezone for the digest time and the dates in it
     "TIMEZONE": "UTC",
+    // When the digest goes out, in TIMEZONE: weekdays ("mon", "mon,thu" or
+    // "daily") at this hour (0-23).
+    "DIGEST_DAYS": "mon",
+    "DIGEST_HOUR": "20",
 
     // Decision model. Clef models run on the free Workers AI allocation; the
     // google/ and openai/ models need AI_GATEWAY_ID and AI Gateway credits.
@@ -52,8 +57,14 @@
     // Characters of message body sent to the model; 0 = never fetch the body.
     "PREVIEW_CHARS": "200",
 
-    "LOOKBACK_DAYS": "14",
-    "MAX_EMAILS_PER_RUN": "300",
+    // Work per run: Spam messages reviewed, or Sent messages indexed. Sized
+    // for the Workers Free 10 ms CPU limit; MAX_SLICES_PER_RUN > 1 does more
+    // per run on Workers Paid.
+    "SPAM_SLICE": "40",
+    "SENT_PAGE": "200",
+    "MAX_SLICES_PER_RUN": "1",
+    // How far back the first pass through Spam starts. Empty = all of it.
+    "BACKLOG_DAYS": "",
     // Sender patterns: address, domain, or *@domain (README "Rules").
     "ALWAYS_REPORT": "",
     "NEVER_REPORT": "",
@@ -64,7 +75,7 @@
     // Needs FASTMAIL_WRITE_TOKEN. Empty = report only, never touch mail.
     "RESCUE_MAILBOX": "",
     "RESCUE_BASIS": "deterministic",
-    "MAX_RESCUES_PER_RUN": "20",
+    "MAX_RESCUES_PER_DIGEST": "20",
 
     "SEND_WHEN_EMPTY": "true",
     // Workers Free allows 50 subrequests per run; raise on Workers Paid.

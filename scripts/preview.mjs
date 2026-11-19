@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /**
  * Scan your real Spam folder and print what fastspam would report.
- * Sends nothing, writes nothing, moves nothing (the pipeline's readOnly mode).
+ * Sends nothing and moves nothing. The deployed Worker does this a slice per
+ * run; the preview does every slice at once, against a throwaway local KV.
  *
- *   npm run preview
+ *   npm run preview                         the last 14 days of Spam
+ *   npm run preview -- --days 30            further back (--days all for everything)
  *   npm run preview -- --compare-batching   batched vs one question per call
  *   npm run preview -- --label              write eval-private/<date>.json to label
  *   (scripts/build-eval-set.mjs builds larger labelled sets from Spam and Inbox)
@@ -11,9 +13,9 @@
  * Needs FASTMAIL_TOKEN in .dev.vars and `npx wrangler login` (for Workers AI).
  */
 import { mkdirSync, writeFileSync } from "node:fs";
-import { loadEnv, flag } from "./env.mjs";
+import { loadEnv, flag, option } from "./env.mjs";
 
-const { run } = await import("../src/pipeline.ts");
+const { work, digest } = await import("../src/pipeline.ts");
 const { loadConfig } = await import("../src/config.ts");
 const { classify } = await import("../src/ai/classify.ts");
 const { disagreement } = await import("../src/eval/score.ts");
@@ -21,12 +23,19 @@ const { notSpam } = await import("../src/ai/classifier.ts");
 
 const { env, dispose } = await loadEnv();
 try {
+  const days = option("days", "14");
+  // All of Sent and the chosen stretch of Spam in one run. The KV from
+  // loadEnv() is in memory only, so nothing here touches production state.
+  Object.assign(env, { MAX_SLICES_PER_RUN: "1000000", SUBREQUEST_BUDGET: "10000", BACKLOG_DAYS: days === "all" ? "" : days });
   const config = loadConfig(env);
-  const report = await run(env, new Date(), { readOnly: true, log: (m) => console.error(`  ${m}`) });
-  const { stats, candidates } = report;
+  const now = new Date();
+  const report = await work(env, now, { readOnly: true, log: (m) => console.error(`  ${m}`) });
+  const digestReport = await digest(env, now, { readOnly: true, log: () => {} });
+  const candidates = report.reviewed;
 
   console.log(`\nSpam mailbox: ${report.junkMailbox}`);
-  console.log(`Window: since ${stats.since.toISOString()} · ${stats.inWindow} in window · ${stats.fresh} reviewed`);
+  console.log(`Indexed ${report.sentIndexed} Sent messages · reviewed ${candidates.length} Spam messages (${days === "all" ? "all of Spam" : `last ${days} days`}) in ${report.slices} slices`);
+  if (!report.idle) console.log("Stopped before the end: see the problems listed in the digest below.");
 
   // Settle the unknowns the README calls out.
   console.log("\nSpam headers (SPAM_HEADERS):");
@@ -47,14 +56,11 @@ try {
   console.log(`DMARC results: ${JSON.stringify(dmarc)}`);
   console.log(`Sample link (does it open the message?): ${report.sampleLink ?? "(FASTMAIL_LINK_TEMPLATE is empty)"}`);
 
-  console.log(`\nLadder: ${stats.settledByFact} reported on facts · ${stats.droppedByRule} dropped by rules · ${stats.sentToModel} to ${config.aiModel}`);
-  const c = report.classification;
-  if (c) {
-    console.log(`Model: ${c.calls} call(s) · ${c.inputTokens} input tokens · ${c.verdicts.size} valid · ${c.rejected} rejected · ${c.skipped} skipped`);
-    for (const w of c.warnings.slice(0, 10)) console.log(`  warning: ${w}`);
-  }
-  console.log(`Subrequests used: ${report.subrequests} of ${config.subrequestBudget}\n`);
-  console.log(report.message ? `${report.message.subject}\n\n${report.message.text}` : "(no digest: nothing to report and SEND_WHEN_EMPTY=false)");
+  console.log(`\nLadder: ${report.settledByFact} reported on facts · ${report.droppedByRule} dropped by rules · ${report.sentToModel} to ${config.aiModel} in ${report.modelCalls} call(s)`);
+  for (const w of report.classification?.warnings.slice(0, 10) ?? []) console.log(`  warning: ${w}`);
+  console.log(`Subrequests used: ${report.subrequests} (a deployed run is limited to ${loadConfig({ ...env, SUBREQUEST_BUDGET: undefined }).subrequestBudget})\n`);
+  const message = digestReport.message;
+  console.log(message ? `${message.subject}\n\n${message.text}` : "(no digest: nothing to report and SEND_WHEN_EMPTY=false)");
 
   if (flag("compare-batching") && report.modelItems.length) {
     const items = report.modelItems.map((m) => m.item);

@@ -11,7 +11,7 @@ import type { JmapClient } from "./client.ts";
  *  - the patch removes the Junk membership and adds the rescue one, and
  *    touches nothing else (no keywords, no other mailboxes);
  *  - there is no `destroy` anywhere in this codebase;
- *  - at most `max` messages per run.
+ *  - at most `max` messages per call (the pipeline passes what is left of the per-digest allowance).
  */
 export async function rescue(
   client: JmapClient,
@@ -31,7 +31,7 @@ export async function rescue(
   const toMove: string[] = [];
   for (const id of ids) {
     if (!inJunk.has(id)) result.skipped.push({ id, reason: "no longer in Spam" });
-    else if (toMove.length >= opts.max) result.skipped.push({ id, reason: `MAX_RESCUES_PER_RUN (${opts.max}) reached` });
+    else if (toMove.length >= opts.max) result.skipped.push({ id, reason: "MAX_RESCUES_PER_DIGEST reached" });
     else toMove.push(id);
   }
   if (!toMove.length) return result;

@@ -1,46 +1,48 @@
-import { TIERS, type Candidate, type RescueResult, type Suspect, type Tier } from "../types.ts";
+import { TIERS, type Candidate, type RescueResult, type Tier } from "../types.ts";
 import type { Message } from "../notify/notifier.ts";
-import { notSpam } from "../ai/classifier.ts";
+import type { PendingSuspect } from "./state.ts";
 import { clean, LIMITS } from "./sanitise.ts";
+import { dateFormatter, isoDate } from "./time.ts";
 
+/** What the digest reports about the period since the last one. */
 export interface RunStats {
-  /** Messages in Spam inside the window, as the server counted them. */
-  inWindow: number;
-  /** Fetched this run and not reviewed before. */
-  fresh: number;
+  /** Spam messages reviewed in the period. */
+  reviewed: number;
+  /** Start of the period (the last digest). */
   since: Date;
   droppedByRule: number;
   settledByFact: number;
   sentToModel: number;
-  classified: number;
-  unclassified: number;
   modelCalls: number;
   model: string;
   failures: string[];
   notes: string[];
+  /** Set while the first pass through Spam is still running. */
+  backlog?: { reviewedThrough: Date | null; remaining: number | null };
+  /** Set while Sent history is still being indexed. */
+  indexing?: { indexed: number; total: number | null };
+  /** Finds left out because they had already left Spam. */
+  leftSpam?: number;
 }
 
+/** Everything the digest needs about a find; a full Suspect fits too. */
+export type DigestSuspect = Omit<PendingSuspect, "moved">;
+type Linkable = Pick<Candidate, "id" | "threadId">;
+
 export interface DigestInput {
-  suspects: Suspect[];
+  suspects: DigestSuspect[];
   rescue?: RescueResult;
   rescueMailboxName?: string;
   stats: RunStats;
   now: Date;
   timezone: string;
   sendWhenEmpty: boolean;
-  link: (c: Candidate) => string | undefined;
+  link: (c: Linkable) => string | undefined;
 }
 
 const MAX_PER_SECTION = 50;
 
-export function dateFormatter(timezone: string): (d: Date | number) => string {
-  const f = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, weekday: "short", day: "numeric", month: "short", year: "numeric" });
-  return (d) => f.format(typeof d === "number" ? new Date(d) : d);
-}
-
-function isoDate(d: Date, timezone: string): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
-}
+export { dateFormatter };
 
 /**
  * Plain text, short lines, readable on a phone. Facts come before model
@@ -63,20 +65,20 @@ export function renderDigest(input: DigestInput): Message | null {
   const fmt = dateFormatter(input.timezone);
   if (!suspects.length && !stats.failures.length && !input.sendWhenEmpty) return null;
   const moved = new Set(rescue?.moved ?? []);
-  const score = (s: Suspect) => (s.verdict ? notSpam(s.verdict) : 1);
+  const score = (s: DigestSuspect) => s.verdict?.notSpam ?? 1;
 
   const lines: string[] = [];
-  const sender = (s: Suspect) => {
+  const sender = (s: DigestSuspect) => {
     const name = clean(s.candidate.fromName, LIMITS.name);
     const addr = clean(s.candidate.fromEmail, LIMITS.address) || "(no sender)";
     return name ? `${name} <${addr}>` : addr;
   };
-  const why = (s: Suspect) => {
+  const why = (s: DigestSuspect) => {
     if (s.basis !== "model" || !s.verdict) return s.detail;
-    const pct = Math.round(notSpam(s.verdict) * 100);
+    const pct = Math.round(s.verdict.notSpam * 100);
     return s.verdict.category ? `${s.verdict.category} · ${pct}% not spam (model)` : `${pct}% likely legitimate (model)`;
   };
-  const full = (s: Suspect) => {
+  const full = (s: DigestSuspect) => {
     const c = s.candidate;
     const received = Date.parse(c.receivedAt);
     lines.push(`• ${clean(c.subject, LIMITS.subject) || "(no subject)"}`);
@@ -88,7 +90,7 @@ export function renderDigest(input: DigestInput): Message | null {
     lines.push("");
   };
   // Promotions are listed briefly: they matter least.
-  const brief = (s: Suspect) => {
+  const brief = (s: DigestSuspect) => {
     const c = s.candidate;
     lines.push(`• ${clean(c.subject, 80) || "(no subject)"} · ${clean(c.fromEmail, LIMITS.address)}${moved.has(c.id) ? " → moved" : ""}`);
     const link = input.link(c);
@@ -124,13 +126,24 @@ export function renderDigest(input: DigestInput): Message | null {
   }
 
   lines.push("—");
-  lines.push(`Reviewed ${stats.fresh} new message${stats.fresh === 1 ? "" : "s"} in Spam since ${fmt(stats.since)} (${stats.inWindow} in the window).`);
+  lines.push(`Reviewed ${stats.reviewed} message${stats.reviewed === 1 ? "" : "s"} in Spam since ${fmt(stats.since)}.`);
   lines.push(
     `${stats.settledByFact} reported on facts, ${stats.droppedByRule} dropped by rules, ${stats.sentToModel} sent to ${stats.model}` +
       (stats.sentToModel ? ` in ${stats.modelCalls} call${stats.modelCalls === 1 ? "" : "s"}` : "") +
-      (stats.unclassified ? `, ${stats.unclassified} left unclassified (retried next run)` : "") +
       ".",
   );
+  if (stats.indexing) {
+    const of = stats.indexing.total !== null ? ` of ${stats.indexing.total}` : "";
+    lines.push(`Still indexing your Sent mail (${stats.indexing.indexed}${of} messages). Spam review starts when that's done.`);
+  }
+  if (stats.backlog) {
+    const through = stats.backlog.reviewedThrough ? `reviewed up to ${fmt(stats.backlog.reviewedThrough)}` : "not started yet";
+    const left = stats.backlog.remaining !== null ? `, about ${stats.backlog.remaining} to go` : "";
+    lines.push(`Still working through older Spam: ${through}${left}.`);
+  }
+  if (stats.leftSpam) {
+    lines.push(`${stats.leftSpam} earlier find${stats.leftSpam === 1 ? " has" : "s have"} already left Spam and ${stats.leftSpam === 1 ? "isn't" : "aren't"} listed.`);
+  }
   for (const n of stats.notes) lines.push(`Note: ${n}`);
   if (stats.failures.length) {
     lines.push("", "Problems this run:");
@@ -139,15 +152,15 @@ export function renderDigest(input: DigestInput): Message | null {
 
   const date = isoDate(input.now, input.timezone);
   const subject = suspects.length
-    ? `[fastspam] ${counts.join(", ")} in ${stats.fresh} spam (${date})`
-    : `[fastspam] nothing to rescue in ${stats.fresh} spam (${date})${stats.failures.length ? " with problems" : ""}`;
+    ? `[fastspam] ${counts.join(", ")} in ${stats.reviewed} spam (${date})`
+    : `[fastspam] nothing to rescue in ${stats.reviewed} spam (${date})${stats.failures.length ? " with problems" : ""}`;
   return { subject, text: lines.join("\n") + "\n" };
 }
 
 /** Fill FASTMAIL_LINK_TEMPLATE from values code already holds. Empty template = no links. */
 export function makeLinker(template: string, vars: { accountId: string; mailboxId: string; mailboxName: string }) {
   if (!template) return () => undefined;
-  return (c: Candidate) =>
+  return (c: Linkable) =>
     template.replace(/\{(id|threadId|mailboxId|mailboxName|accountId)\}/g, (_, k: string) => {
       const v = k === "id" ? c.id : k === "threadId" ? c.threadId : vars[k as keyof typeof vars];
       return encodeURIComponent(v);

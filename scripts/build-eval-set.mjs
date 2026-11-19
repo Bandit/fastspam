@@ -3,7 +3,7 @@
  * Build PRIVATE labelled evaluation sets from your own mail. Read-only: uses
  * FASTMAIL_TOKEN, moves nothing, and never calls a model.
  *
- *   node scripts/build-eval-set.mjs --spam            your Spam window, labelled "spam"
+ *   node scripts/build-eval-set.mjs --spam            the last 14 days of Spam (--spam-days N), labelled "spam"
  *   node scripts/build-eval-set.mjs --legit 40 --mailboxes "Inbox,Receipts"
  *                                                     recent mail you KEPT in the mailboxes you
  *                                                     NAME, from senders you never started a
@@ -29,7 +29,7 @@ const { loadConfig } = await import("../src/config.ts");
 const { JmapClient } = await import("../src/jmap/client.ts");
 const { listMailboxes, resolveMailbox } = await import("../src/jmap/mailboxes.ts");
 const { fetchCandidates, emailProperties, toCandidate } = await import("../src/jmap/spam.ts");
-const { updateIndex, lookup } = await import("../src/jmap/correspondents.ts");
+const { applySent, emptyIndex, lookup, SENT_PROPERTIES } = await import("../src/jmap/correspondents.ts");
 const { promptMessage } = await import("../src/ai/prompt.ts");
 
 const { env, dispose } = await loadEnv();
@@ -39,8 +39,9 @@ try {
   const boxes = await listMailboxes(client);
   const junk = resolveMailbox(boxes, { label: "Spam", override: config.spamMailbox, role: "junk", names: /^(spam|junk)$/i, required: true });
   const sent = resolveMailbox(boxes, { label: "Sent", override: config.sentMailbox, role: "sent", names: /^sent/i, required: true });
-  const { index } = await updateIndex(client, undefined, { sentId: sent.id, bootstrap: config.correspondentBootstrap, max: config.correspondentMax });
-  const who = lookup(index);
+  // The whole of Sent, as the deployed Worker indexes it (a page per run there).
+  const { ids: sentIds } = await client.queryEmailIds({ inMailbox: sent.id }, 100_000);
+  const who = lookup(applySent(emptyIndex(), await client.getMany("Email/get", sentIds, SENT_PROPERTIES), config.correspondentMax));
   const now = new Date();
   const date = now.toISOString().slice(0, 10);
   const opts = { spamHeaders: config.spamHeaders, previewChars: config.previewChars, trustedAuthservIds: config.trustedAuthservIds };
@@ -52,7 +53,8 @@ try {
   mkdirSync("eval-private", { recursive: true });
 
   if (flag("spam")) {
-    const { candidates } = await fetchCandidates(client, { ...opts, junkId: junk.id, after: new Date(now.getTime() - config.lookbackDays * 864e5), max: 1000 });
+    const spamDays = Number(option("spam-days", "14"));
+    const { candidates } = await fetchCandidates(client, { ...opts, junkId: junk.id, after: new Date(now.getTime() - spamDays * 864e5), max: 1000 });
     const fixtures = candidates.map((c, i) => toFixture(c, i, "s", "spam"));
     const path = `eval-private/real-spam-${date}.json`;
     writeFileSync(path, JSON.stringify({ suite: "private", external: true, note: "Real Spam, labelled spam. Relabel anything legitimate.", fixtures }, null, 2));

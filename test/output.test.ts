@@ -19,14 +19,11 @@ const cand = (id: string, over: Partial<Candidate> = {}): Candidate => ({
 });
 
 const stats = (over: Partial<RunStats> = {}): RunStats => ({
-  inWindow: 10,
-  fresh: 10,
-  since: new Date("2026-11-09T00:00:00Z"),
+  reviewed: 10,
+  since: new Date("2026-11-16T20:00:00Z"),
   droppedByRule: 1,
   settledByFact: 1,
   sentToModel: 8,
-  classified: 8,
-  unclassified: 0,
   modelCalls: 1,
   model: "@cf/cloudflare/clef",
   failures: [],

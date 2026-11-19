@@ -3,22 +3,29 @@ import type { Env } from "./types.ts";
 
 export default {
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
-    // Retrying could send a second digest; a missed run is caught up next time.
+    // Retrying could send a second digest; the next run (minutes away) carries on.
     (controller as unknown as { noRetry?: () => void }).noRetry?.();
     const report = await run(env, new Date(controller.scheduledTime));
-    console.log(
-      JSON.stringify({
-        fresh: report.stats.fresh,
-        reported: report.suspects.length,
-        settledByFact: report.stats.settledByFact,
-        sentToModel: report.stats.sentToModel,
-        modelCalls: report.stats.modelCalls,
-        moved: report.rescue?.moved.length ?? 0,
-        failures: report.stats.failures,
-        subrequests: report.subrequests,
-        sent: report.sent,
-      }),
-    );
+    if (report.kind === "digest") {
+      console.log(JSON.stringify({ kind: "digest", listed: report.listed, reviewed: report.stats.reviewed, sent: report.sent, failures: report.stats.failures, subrequests: report.subrequests }));
+    } else {
+      console.log(
+        JSON.stringify({
+          kind: "work",
+          slices: report.slices,
+          sentIndexed: report.sentIndexed,
+          reviewed: report.reviewed.length,
+          found: report.suspects.length,
+          settledByFact: report.settledByFact,
+          sentToModel: report.sentToModel,
+          modelCalls: report.modelCalls,
+          moved: report.rescue?.moved.length ?? 0,
+          idle: report.idle,
+          failures: report.failures,
+          subrequests: report.subrequests,
+        }),
+      );
+    }
   },
 
   // No HTTP interface on purpose: nothing to attack. (workers_dev is off.)

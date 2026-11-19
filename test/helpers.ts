@@ -162,9 +162,14 @@ export class FakeJmap {
         return { ids: this.mailboxes.filter((m) => !role || m.role === role).map((m) => m.id) };
       }
       case "Email/query": {
-        const f = args.filter as { inMailbox?: string; after?: string };
-        let list = this.emails.filter((e) => (!f.inMailbox || e.mailboxIds[f.inMailbox]) && (!f.after || e.receivedAt >= f.after));
-        list = [...list].sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
+        // RFC 8621: `after` is inclusive, `before` is strict.
+        const f = args.filter as { inMailbox?: string; after?: string; before?: string };
+        let list = this.emails.filter(
+          (e) => (!f.inMailbox || e.mailboxIds[f.inMailbox]) && (!f.after || e.receivedAt >= f.after) && (!f.before || e.receivedAt < f.before),
+        );
+        const ascending = (args.sort as { isAscending?: boolean }[] | undefined)?.[0]?.isAscending === true;
+        // Stable, so equal timestamps keep insertion order.
+        list = [...list].sort((a, b) => (ascending ? a.receivedAt.localeCompare(b.receivedAt) : b.receivedAt.localeCompare(a.receivedAt)));
         const position = Number(args.position ?? 0);
         const limit = Math.min(Number(args.limit ?? 1000), this.opts.queryLimitCap ?? Infinity);
         return {

@@ -23,8 +23,7 @@ const ctx = (over: Partial<DecideContext> = {}): DecideContext => ({
   spamScoreSkipAbove: null,
   honourDmarcPolicy: true,
   correspondents: lookup({
-    v: 2,
-    updatedAt: "",
+    v: 3,
     addresses: { "friend@mail.example": Date.UTC(2026, 9, 3), "spammer@scam.example": Date.UTC(2026, 10, 1) },
     started: { "friend@mail.example": Date.UTC(2026, 9, 3) },
     self: ["owner@owner.example"],
@@ -73,7 +72,7 @@ describe("decision ladder", () => {
     expect(decide(cand({ fromEmail: "stranger@mail.example" }), ctx()).outcome).toBe("model");
   });
   it("never treats your own (often forged) address as a correspondent", () => {
-    const c = ctx({ correspondents: lookup({ v: 2, updatedAt: "", addresses: { "owner@owner.example": 1 }, started: { "owner@owner.example": 1 }, self: ["owner@owner.example"] }) });
+    const c = ctx({ correspondents: lookup({ v: 3, addresses: { "owner@owner.example": 1 }, started: { "owner@owner.example": 1 }, self: ["owner@owner.example"] }) });
     expect(decide(cand({ fromEmail: "owner@owner.example" }), c).outcome).toBe("model");
   });
   it("skips sender-based facts when DMARC fails", () => {

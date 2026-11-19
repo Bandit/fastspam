@@ -20,8 +20,17 @@ export interface Config {
   sentMailbox: string;
   rescueMailbox: string;
 
-  lookbackDays: number;
-  maxEmailsPerRun: number;
+  /** When the digest goes out: weekdays (0 = Sunday) at DIGEST_HOUR, in TIMEZONE. */
+  digestDays: number[];
+  digestHour: number;
+  /** Spam messages reviewed per slice of work. */
+  spamSlice: number;
+  /** Sent messages indexed per slice of work. */
+  sentPage: number;
+  /** Slices of work per run (1 fits the Workers Free CPU limit). */
+  maxSlicesPerRun: number;
+  /** How far back the first pass through Spam starts; null = all of it. */
+  backlogDays: number | null;
   previewChars: number;
   spamHeaders: string[];
   spamScoreSkipAbove: number | null;
@@ -47,11 +56,9 @@ export interface Config {
   honourDmarcPolicy: boolean;
 
   rescueBasis: "deterministic" | "all";
-  maxRescuesPerRun: number;
+  maxRescuesPerDigest: number;
 
-  correspondentBootstrap: number;
   correspondentMax: number;
-  forgetAfterDays: number;
   sendWhenEmpty: boolean;
   /** Subrequests this run may make (Workers Free allows 50 per invocation). */
   subrequestBudget: number;
@@ -87,6 +94,16 @@ function str(v: unknown, fallback = ""): string {
 }
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
+
+const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+/** "mon", "mon,thu", "daily" → weekday numbers (0 = Sunday). Unknown names are ignored; nothing valid → Monday. */
+export function digestDays(v: unknown): number[] {
+  const parts = list(typeof v === "string" ? v.toLowerCase() : "mon");
+  if (parts.includes("daily")) return [0, 1, 2, 3, 4, 5, 6];
+  const days = [...new Set(parts.map((p) => WEEKDAYS.indexOf(p.slice(0, 3))).filter((d) => d >= 0))].sort();
+  return days.length ? days : [1];
+}
 
 /**
  * Only the score is used. Fastmail also sets X-Spam-hits (the rules that fired),
@@ -124,8 +141,12 @@ export function loadConfig(env: Env): Config {
     sentMailbox: str(env.SENT_MAILBOX),
     rescueMailbox: str(env.RESCUE_MAILBOX),
 
-    lookbackDays: clamp(num(env.LOOKBACK_DAYS, 14), 1, 60),
-    maxEmailsPerRun: clamp(Math.floor(num(env.MAX_EMAILS_PER_RUN, 300)), 1, 5000),
+    digestDays: digestDays(env.DIGEST_DAYS),
+    digestHour: clamp(Math.floor(num(env.DIGEST_HOUR, 20)), 0, 23),
+    spamSlice: clamp(Math.floor(num(env.SPAM_SLICE, 40)), 1, 1000),
+    sentPage: clamp(Math.floor(num(env.SENT_PAGE, 200)), 10, 5000),
+    maxSlicesPerRun: clamp(Math.floor(num(env.MAX_SLICES_PER_RUN, 1)), 1, 1000),
+    backlogDays: optionalNum(env.BACKLOG_DAYS) === null ? null : clamp(optionalNum(env.BACKLOG_DAYS)!, 1, 3650),
     previewChars: clamp(Math.floor(num(env.PREVIEW_CHARS, 200)), 0, 256),
     spamHeaders: env.SPAM_HEADERS === undefined ? DEFAULT_SPAM_HEADERS : list(env.SPAM_HEADERS),
     spamScoreSkipAbove: optionalNum(env.SPAM_SCORE_SKIP_ABOVE),
@@ -146,11 +167,9 @@ export function loadConfig(env: Env): Config {
     honourDmarcPolicy: bool(env.HONOUR_DMARC_POLICY, true),
 
     rescueBasis: str(env.RESCUE_BASIS) === "all" ? "all" : "deterministic",
-    maxRescuesPerRun: clamp(Math.floor(num(env.MAX_RESCUES_PER_RUN, 20)), 0, 500),
+    maxRescuesPerDigest: clamp(Math.floor(num(env.MAX_RESCUES_PER_DIGEST, 20)), 0, 500),
 
-    correspondentBootstrap: clamp(Math.floor(num(env.CORRESPONDENT_BOOTSTRAP, 2000)), 0, 20_000),
     correspondentMax: clamp(Math.floor(num(env.CORRESPONDENT_MAX, 5000)), 100, 100_000),
-    forgetAfterDays: clamp(num(env.FORGET_AFTER_DAYS, 60), 1, 3650),
     sendWhenEmpty: bool(env.SEND_WHEN_EMPTY, true),
     subrequestBudget: clamp(Math.floor(num(env.SUBREQUEST_BUDGET, 45)), 10, 10_000),
   };

@@ -1,29 +1,33 @@
-import type { JmapClient } from "./client.ts";
 import type { CorrespondentIndex } from "../lib/state.ts";
 import { cleanAddress, domainOf } from "../lib/sanitise.ts";
 
 /**
- * The "have you written to them?" index, built from your Sent mail and kept in
- * KV. Looking an address up costs nothing and matches exactly, unlike
- * Email/query's `from` filter whose matching RFC 8621 leaves undefined.
+ * The "have you written to them?" index, built from your Sent mail a page at a
+ * time and kept in KV. Looking an address up costs nothing and matches
+ * exactly, unlike Email/query's `from` filter whose matching RFC 8621 leaves
+ * undefined.
  *
  * It distinguishes STARTING a conversation from REPLYING. Only the first is
  * treated as a fact: people reply to spammers (to unsubscribe, complain, or
  * on purpose), but a message you wrote unprompted is strong evidence the
  * address is someone you deal with.
+ *
+ * Applying the same message twice changes nothing, which is what lets the
+ * paging overlap safely.
  */
 
-const OVERLAP_MS = 86_400_000;
 /** Reply prefixes in common languages (Re, Aw, Sv, Antw, Vs, Odp, Ynt, 回复, 答复). */
 const REPLY_SUBJECT = /^\s*(re|aw|sv|antw|vs|odp|ynt|回复|答复)\s*(\[\d+\])?\s*[:：]/i;
 
-export interface UpdateOptions {
-  sentId: string;
-  bootstrap: number;
-  max: number;
-}
+/**
+ * What is fetched for each Sent message. `references` is left out: it was over
+ * a third of the response, and on a real account no Sent message was a reply
+ * by References alone (each also had In-Reply-To or a reply subject).
+ * isReply still honours it when present.
+ */
+export const SENT_PROPERTIES = ["id", "from", "to", "cc", "bcc", "receivedAt", "subject", "inReplyTo"];
 
-interface SentRow {
+export interface SentRow {
   from?: { email?: string }[] | null;
   to?: { email?: string }[] | null;
   cc?: { email?: string }[] | null;
@@ -42,8 +46,8 @@ export function isReply(r: Pick<SentRow, "subject" | "inReplyTo" | "references">
   return (r.inReplyTo?.length ?? 0) > 0 || (r.references?.length ?? 0) > 0 || REPLY_SUBJECT.test(r.subject ?? "");
 }
 
-function emptyIndex(): CorrespondentIndex {
-  return { v: 2, updatedAt: new Date(0).toISOString(), addresses: {}, started: {}, self: [] };
+export function emptyIndex(): CorrespondentIndex {
+  return { v: 3, addresses: {}, started: {}, self: [] };
 }
 
 function keepNewest(map: Record<string, number>, max: number): Record<string, number> {
@@ -53,32 +57,11 @@ function keepNewest(map: Record<string, number>, max: number): Record<string, nu
   return Object.fromEntries(entries.slice(0, max));
 }
 
-export async function updateIndex(
-  client: JmapClient,
-  previous: CorrespondentIndex | undefined,
-  opts: UpdateOptions,
-): Promise<{ index: CorrespondentIndex; scanned: number }> {
-  // An index in an older format is rebuilt rather than trusted.
-  const usable = previous?.v === 2 ? previous : undefined;
-  const index: CorrespondentIndex = usable
-    ? { v: 2, updatedAt: usable.updatedAt, addresses: { ...usable.addresses }, started: { ...usable.started }, self: [...usable.self] }
-    : emptyIndex();
-  const fresh = !usable || Object.keys(usable.addresses).length === 0;
-  if (opts.bootstrap <= 0) return { index, scanned: 0 };
-
-  const filter: Record<string, unknown> = { inMailbox: opts.sentId };
-  if (!fresh) filter.after = new Date(Date.parse(index.updatedAt) - OVERLAP_MS).toISOString();
-  const { ids } = await client.queryEmailIds(filter, opts.bootstrap);
-  // `references` is not fetched: it was over a third of this response, and on a
-  // real account no Sent message was a reply by References alone (every one also
-  // had In-Reply-To or a reply subject). isReply still honours it when present.
-  const rows = (await client.getMany("Email/get", ids, ["id", "from", "to", "cc", "bcc", "receivedAt", "subject", "inReplyTo"])) as SentRow[];
-
+/** Fold a page of Sent messages into the index (mutates and returns it). */
+export function applySent(index: CorrespondentIndex, rows: readonly SentRow[], max: number): CorrespondentIndex {
   const self = new Set(index.self);
-  let newest = Date.parse(index.updatedAt) || 0;
   for (const r of rows) {
     const at = Date.parse(r.receivedAt ?? "") || 0;
-    newest = Math.max(newest, at);
     for (const f of r.from ?? []) if (f.email) self.add(cleanAddress(f.email));
     const started = !isReply(r);
     for (const a of [...(r.to ?? []), ...(r.cc ?? []), ...(r.bcc ?? [])]) {
@@ -94,10 +77,9 @@ export async function updateIndex(
     delete index.started[s];
   }
   index.self = [...self].sort();
-  index.updatedAt = new Date(newest).toISOString();
-  index.addresses = keepNewest(index.addresses, opts.max);
-  index.started = keepNewest(index.started, opts.max);
-  return { index, scanned: rows.length };
+  index.addresses = keepNewest(index.addresses, max);
+  index.started = keepNewest(index.started, max);
+  return index;
 }
 
 export interface CorrespondentLookup {
@@ -112,7 +94,7 @@ export interface CorrespondentLookup {
 }
 
 export function lookup(index: CorrespondentIndex | undefined): CorrespondentLookup {
-  const usable = index?.v === 2 ? index : undefined;
+  const usable = index?.v === 3 ? index : undefined;
   const addresses = usable?.addresses ?? {};
   const started = usable?.started ?? {};
   const domains = new Set(Object.keys(addresses).map(domainOf).filter(Boolean));

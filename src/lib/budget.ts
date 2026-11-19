@@ -5,7 +5,7 @@
  */
 export class BudgetExceededError extends Error {
   constructor(limit: number) {
-    super(`ran out of subrequest budget (${limit}); lower MAX_EMAILS_PER_RUN or raise SUBREQUEST_BUDGET on Workers Paid`);
+    super(`ran out of subrequest budget (${limit}); lower SPAM_SLICE or BATCH_SIZE, or raise SUBREQUEST_BUDGET on Workers Paid`);
   }
 }
 

@@ -3,7 +3,7 @@ import { JmapAuthError, JmapClient, JmapMethodError } from "../src/jmap/client.t
 import { listMailboxes, resolveMailbox } from "../src/jmap/mailboxes.ts";
 import { emailProperties, fetchCandidates } from "../src/jmap/spam.ts";
 import { threadsWithRealMail } from "../src/jmap/threads.ts";
-import { isReply, lookup, updateIndex } from "../src/jmap/correspondents.ts";
+import { applySent, emptyIndex, isReply, lookup, SENT_PROPERTIES, type SentRow } from "../src/jmap/correspondents.ts";
 import { rescue } from "../src/jmap/rescue.ts";
 import { appendToInbox } from "../src/jmap/append.ts";
 import { Budget } from "../src/lib/budget.ts";
@@ -128,12 +128,13 @@ describe("thread participation", () => {
 
 describe("correspondent index", () => {
   const now = new Date("2026-11-23T20:00:00Z");
-  it("bootstraps from Sent recipients and excludes your own addresses", async () => {
-    const fake = new FakeJmap({
-      emails: [sentEmail("Friend@Mail.example", 50, "owner@owner.example", now), { ...sentEmail("owner@owner.example", 2, "owner@owner.example", now), cc: [{ email: "colleague@work.example" }] }],
-    });
-    const { index, scanned } = await updateIndex(client(fake), undefined, { sentId: "mb-sent", bootstrap: 100, max: 1000 });
-    expect(scanned).toBe(2);
+  const rows = (emails: ReturnType<typeof sentEmail>[]) => emails as SentRow[];
+  it("indexes Sent recipients and excludes your own addresses", () => {
+    const index = applySent(
+      emptyIndex(),
+      rows([sentEmail("Friend@Mail.example", 50, "owner@owner.example", now), { ...sentEmail("owner@owner.example", 2, "owner@owner.example", now), cc: [{ email: "colleague@work.example" }] }]),
+      1000,
+    );
     expect(Object.keys(index.addresses).sort()).toEqual(["colleague@work.example", "friend@mail.example"]);
     expect(index.self).toEqual(["owner@owner.example"]);
     const l = lookup(index);
@@ -141,17 +142,18 @@ describe("correspondent index", () => {
     expect(l.domain("someone@work.example")).toBe(true);
     expect(l.started("owner@owner.example")).toBeUndefined();
   });
-  it("records replies separately from conversations you started", async () => {
-    const fake = new FakeJmap({
-      emails: [
+  it("records replies separately from conversations you started", () => {
+    const index = applySent(
+      emptyIndex(),
+      rows([
         sentEmail("friend@mail.example", 10),
         sentReply("spammer@scam.example", "TS", 3),
         sentEmail("irt@x.example", 3, undefined, undefined, { inReplyTo: ["<a@b.example>"] }),
         sentEmail("subj@x.example", 3, undefined, undefined, { subject: "RE: invoice" }),
         sentEmail("aw@x.example", 3, undefined, undefined, { subject: "Aw: Termin" }),
-      ],
-    });
-    const { index } = await updateIndex(client(fake), undefined, { sentId: "mb-sent", bootstrap: 100, max: 1000 });
+      ]),
+      1000,
+    );
     expect(Object.keys(index.started)).toEqual(["friend@mail.example"]);
     expect(Object.keys(index.addresses)).toHaveLength(5);
     const l = lookup(index);
@@ -163,22 +165,25 @@ describe("correspondent index", () => {
     expect(isReply({ subject: "Fwd: report", inReplyTo: null, references: null })).toBe(false);
     expect(isReply({ subject: "Re[2]: x", inReplyTo: null, references: null })).toBe(true);
     expect(isReply({ subject: "x", inReplyTo: ["<m@x.example>"], references: null })).toBe(true);
+    expect(isReply({ subject: "x", inReplyTo: null, references: ["<m@x.example>"] })).toBe(true);
   });
-  it("rebuilds an index in an older format instead of trusting it", async () => {
-    const fake = new FakeJmap({ emails: [sentEmail("new@x.example", 1)] });
-    const old = { v: 1, updatedAt: new Date().toISOString(), addresses: { "stale@x.example": 1 }, self: [] } as unknown as Parameters<typeof updateIndex>[1];
-    const { index } = await updateIndex(client(fake), old, { sentId: "mb-sent", bootstrap: 100, max: 1000 });
-    expect(index.v).toBe(2);
-    expect(index.addresses).not.toHaveProperty(["stale@x.example"]);
-    expect((fake.calls.find((c) => c.name === "Email/query")!.args.filter as { after?: string }).after).toBeUndefined();
+  it("does not fetch References (a third of the Sent response, never decisive)", () => {
+    expect(SENT_PROPERTIES).not.toContain("references");
+    expect(SENT_PROPERTIES).toContain("inReplyTo");
   });
-  it("updates incrementally and keeps only the most recent addresses", async () => {
-    const fake = new FakeJmap({ emails: [sentEmail("new@x.example", 1, undefined, now)] });
-    const prev = { v: 2 as const, updatedAt: new Date(now.getTime() - 5 * 86_400_000).toISOString(), addresses: { "a@x.example": 1, "b@x.example": 2 }, started: {}, self: [] };
-    const { index } = await updateIndex(client(fake), prev, { sentId: "mb-sent", bootstrap: 100, max: 2 });
-    const query = fake.calls.find((c) => c.name === "Email/query")!;
-    expect((query.args.filter as { after?: string }).after).toBeTruthy();
+  it("is idempotent, so overlapping pages are harmless", () => {
+    const page = rows([sentEmail("a@x.example", 3), sentEmail("b@x.example", 2)]);
+    const once = applySent(emptyIndex(), page, 1000);
+    const twice = applySent(applySent(emptyIndex(), page, 1000), page, 1000);
+    expect(twice).toEqual(once);
+  });
+  it("keeps only the most recent addresses", () => {
+    const index = applySent({ v: 3, addresses: { "a@x.example": 1, "b@x.example": 2 }, started: {}, self: [] }, rows([sentEmail("new@x.example", 1, undefined, now)]), 2);
     expect(Object.keys(index.addresses).sort()).toEqual(["b@x.example", "new@x.example"]);
+  });
+  it("ignores an index in an older format", () => {
+    const old = { v: 2, updatedAt: "", addresses: { "x@x.example": 1 }, started: { "x@x.example": 1 }, self: [] } as unknown as Parameters<typeof lookup>[0];
+    expect(lookup(old).started("x@x.example")).toBeUndefined();
   });
 });
 
@@ -196,11 +201,11 @@ describe("rescue (the one write)", () => {
     expect(set.args).not.toHaveProperty("destroy");
     expect(JSON.stringify(set.args)).not.toContain("keywords");
   });
-  it("respects MAX_RESCUES_PER_RUN", async () => {
+  it("respects its cap (MAX_RESCUES_PER_DIGEST)", async () => {
     const emails = Array.from({ length: 3 }, (_, i) => spamEmail({ from: `${i}@x.example`, subject: `${i}` }));
     const r = await rescue(client(new FakeJmap({ emails }), "write-token"), emails.map((e) => e.id), { junkId: "mb-junk", rescueId: "mb-rescued", max: 2 });
     expect(r.moved).toHaveLength(2);
-    expect(r.skipped[0]!.reason).toMatch(/MAX_RESCUES_PER_RUN/);
+    expect(r.skipped[0]!.reason).toMatch(/MAX_RESCUES_PER_DIGEST/);
   });
   it("is refused by the server for a read-only token", async () => {
     const e = spamEmail({ from: "a@x.example", subject: "a" });
