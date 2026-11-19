@@ -25,10 +25,10 @@
   "cloudflare": {
     "bindings": {
       "FASTMAIL_TOKEN": {
-        "description": "Fastmail API token with **Read-only access** (Settings → Privacy & Security → Manage API tokens → New API token → JMAP → Read-only access). Used to scan your Spam folder; it cannot change mail."
+        "description": "Fastmail API token for scanning (Settings → Privacy & Security → Manage API tokens → New API token): protocol JMAP, **Read-only access** on, **Email** scope only. It cannot change mail."
       },
       "FASTMAIL_WRITE_TOKEN": {
-        "description": "Optional. A second Fastmail token with the **Email** scope, needed only for `NOTIFIER=fastmail` (the digest is appended to your Inbox) or `RESCUE_MAILBOX`. Enter `unused` otherwise."
+        "description": "Optional. A second Fastmail token (JMAP, Read-only access **off**, **Email** scope only; not Email submission), needed only for `NOTIFIER=fastmail` (the digest is created in your Inbox) or `RESCUE_MAILBOX`. Enter `unused` otherwise."
       },
       "POSTMARK_SERVER_TOKEN": {
         "description": "Postmark Server API token, used when `NOTIFIER` is `postmark`. Enter `unused` otherwise."
@@ -46,16 +46,22 @@
         "description": "`true` only logs the digest (good for a first run); `false` sends it."
       },
       "TIMEZONE": {
-        "description": "IANA timezone for dates in the digest, e.g. `Europe/London`."
+        "description": "IANA timezone for the digest time and the dates in it, e.g. `Europe/London`."
+      },
+      "DIGEST_DAYS": {
+        "description": "Which days the digest goes out, in `TIMEZONE`: `mon`, `mon,thu` or `daily`."
+      },
+      "DIGEST_HOUR": {
+        "description": "The hour (0-23) the digest goes out, in `TIMEZONE`."
       },
       "AI_MODEL": {
         "description": "Decision model: `@cf/cloudflare/clef` (default, runs on the free Workers AI allocation), `@cf/cloudflare/clef-flash`, `google/gemini-decision-1` or `openai/decisions` (the last two need `AI_GATEWAY_ID` and AI Gateway credits)."
       },
       "AI_GATEWAY_ID": {
-        "description": "Optional AI Gateway name. Required for `google/gemini-decision-1` and `openai/decisions`."
+        "description": "Optional AI Gateway name. Required for `google/gemini-decision-1` and `openai/decisions`. With Unified Billing, Clef calls through a gateway are paid from credits instead of the free allocation: leave this empty to keep Clef free."
       },
       "FASTSPAM_STATE": {
-        "description": "KV namespace for fastspam's state (reviewed message ids, the Sent-recipient index, last run time). A new one is created for you."
+        "description": "KV namespace for fastspam's state (progress through Sent and Spam, finds waiting for the digest, the Sent-recipient index). A new one is created for you."
       },
       "EMAIL": {
         "description": "Cloudflare Email binding, only used when `NOTIFIER` is `cloudflare`."

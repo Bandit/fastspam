@@ -1,16 +1,21 @@
 # fastspam
 
-A weekly look through your Fastmail Spam folder for mail that shouldn't be there.
+A weekly digest of the mail in your Fastmail Spam folder that shouldn't be there.
 
 Fastmail's spam filter is good, but now and then a receipt, a reply from someone new, or a
 sign-in code lands in Spam, and Spam is deleted automatically after 30 days (Fastmail's
-default; you can change it in Fastmail's settings). fastspam runs on a
-Cloudflare Worker each week. It reads the sender and subject of each new message in Spam,
-works out which ones look misfiled, and sends you a short digest.
+default; you can change it in Fastmail's settings). fastspam runs on a Cloudflare Worker. Every
+15 minutes it reads the sender and subject of what has arrived in Spam and works out which
+messages look misfiled; once a week it sends you a short digest of them.
 
 **By default it never changes your mail.** It scans with a Fastmail token that has
 *Read-only access*, so Fastmail itself stops it from changing anything. If you want, it can
 also move the clearest cases out of Spam (see [Rescuing](#rescuing-optional)).
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Bandit/fastspam)
+
+Using the button? Create the Fastmail token first ([Setup, step 1](#1-fastmail-token-read-only)),
+then see [Deploy with the button](#deploy-with-the-button).
 
 - [How decisions are made](#how-decisions-are-made)
 - [Choosing a model](#choosing-a-model)
@@ -185,9 +190,34 @@ about 60%, which means batching makes it more lenient rather than more accurate.
 
 ## Setup
 
-You need a Fastmail account on a plan that includes API tokens (not Basic), a Cloudflare
-account (the free plan works, but see [Limits](#limits)), Node 22.18 or later, and this
-repository.
+You need a Fastmail account on a plan that includes API tokens (not Basic) and a Cloudflare
+account (the free plan works, but see [Limits](#limits)).
+
+### Deploy with the button
+
+The **Deploy to Cloudflare** button above copies this repository into your GitHub account and
+creates the Worker, its cron trigger and a new KV namespace for its state in your Cloudflare
+account. It then asks for the values below; each prompt has a short description.
+
+1. **Before you click**, create the read-only Fastmail token ([step 1](#1-fastmail-token-read-only))
+   and decide how the digest reaches you ([step 2](#2-how-the-digest-reaches-you)).
+2. **Secrets** it asks for: `FASTMAIL_TOKEN`, `FASTMAIL_WRITE_TOKEN`, `POSTMARK_SERVER_TOKEN`,
+   `EMAIL_FROM` and `EMAIL_TO`. Enter `unused` for any you don't need: with the default
+   `NOTIFIER=fastmail` you need both Fastmail tokens and no Postmark token; with `postmark` you
+   need the read-only token, the Postmark token and both addresses.
+3. **Variables** worth changing: `TIMEZONE`, `DIGEST_DAYS` and `DIGEST_HOUR` for when the
+   digest arrives, and `DRY_RUN=true` for a trial that only logs the digest. The model defaults
+   to Clef, which needs no further setup; to use Gemini Decision instead (see the
+   [recommendation](#recommendation)), set `AI_MODEL` and `AI_GATEWAY_ID` after creating a
+   gateway ([step 3](#3-ai-gateway-optional-needed-for-the-google-and-openai-models)).
+
+Later changes go through your copy of the repository: Cloudflare redeploys on every push to it.
+To see what fastspam would report before trusting it, run the [preview](#first-run-preview)
+from a clone of your copy.
+
+### Deploy by hand
+
+You need Node 22.18 or later and a clone of this repository.
 
 ```bash
 npm install

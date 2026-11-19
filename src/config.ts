@@ -131,8 +131,9 @@ export function loadConfig(env: Env): Config {
     dryRun: bool(env.DRY_RUN),
     notifier: notifier === "postmark" || notifier === "cloudflare" ? notifier : "fastmail",
     timezone: str(env.TIMEZONE, "UTC"),
-    emailFrom: str(env.EMAIL_FROM),
-    emailTo: list(env.EMAIL_TO),
+    // "unused" is what the deploy button tells people to enter for values they don't need.
+    emailFrom: str(env.EMAIL_FROM) === "unused" ? "" : str(env.EMAIL_FROM),
+    emailTo: list(env.EMAIL_TO).filter((a) => a !== "unused"),
     postmarkStream: str(env.POSTMARK_MESSAGE_STREAM, "outbound"),
 
     jmapSessionUrl: str(env.JMAP_SESSION_URL, "https://api.fastmail.com/jmap/session"),

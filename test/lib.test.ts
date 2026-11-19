@@ -116,3 +116,13 @@ describe("state and budget", () => {
     expect(b.used).toBe(3);
   });
 });
+
+describe("config", () => {
+  it('treats "unused" digest addresses (as the deploy button suggests) as empty', async () => {
+    const { loadConfig } = await import("../src/config.ts");
+    const c = loadConfig({ FASTSPAM_STATE: {} as KVNamespace, EMAIL_FROM: "unused", EMAIL_TO: "unused" });
+    expect(c.emailFrom).toBe("");
+    expect(c.emailTo).toEqual([]);
+    expect(loadConfig({ FASTSPAM_STATE: {} as KVNamespace, EMAIL_FROM: "me@x.example", EMAIL_TO: "a@x.example, unused" }).emailTo).toEqual(["a@x.example"]);
+  });
+});
