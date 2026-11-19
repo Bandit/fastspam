@@ -3,7 +3,8 @@
 A weekly look through your Fastmail Spam folder for mail that shouldn't be there.
 
 Fastmail's spam filter is good, but now and then a receipt, a reply from someone new, or a
-sign-in code lands in Spam, and Spam empties itself after 30 days. fastspam runs on a
+sign-in code lands in Spam, and Spam is deleted automatically after 30 days (Fastmail's
+default; you can change it in Fastmail's settings). fastspam runs on a
 Cloudflare Worker each week. It reads the sender and subject of each new message in Spam,
 works out which ones look misfiled, and sends you a short digest.
 
@@ -382,7 +383,7 @@ To change a setting for your own deployment without editing `wrangler.jsonc`, pu
 
 Set `RESCUE_MAILBOX` to a mailbox name (for example `Rescued`; create it in Fastmail first),
 and set `FASTMAIL_WRITE_TOKEN`. fastspam will then move suspects out of Spam into that
-mailbox, so they are kept past the 30-day purge even if you don't read the digest in time.
+mailbox, so they survive Spam's automatic deletion even if you don't read the digest in time.
 
 This is the only change fastspam ever makes to mail, and it is deliberately narrow:
 
