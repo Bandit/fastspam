@@ -1,0 +1,65 @@
+{
+  "name": "fastspam",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Weekly review of your Fastmail spam folder for mail that looks legitimate, on Cloudflare Workers",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "node scripts/deploy.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "preview": "node scripts/preview.mjs",
+    "evaluate": "node scripts/evaluate.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261106.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7",
+    "wrangler": "^4.158.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "FASTMAIL_TOKEN": {
+        "description": "Fastmail API token with **Read-only access** (Settings → Privacy & Security → Manage API tokens → New API token → JMAP → Read-only access). Used to scan your Spam folder; it cannot change mail."
+      },
+      "FASTMAIL_WRITE_TOKEN": {
+        "description": "Optional. A second Fastmail token with the **Email** scope, needed only for `NOTIFIER=fastmail` (the digest is appended to your Inbox) or `RESCUE_MAILBOX`. Enter `unused` otherwise."
+      },
+      "POSTMARK_SERVER_TOKEN": {
+        "description": "Postmark Server API token, used when `NOTIFIER` is `postmark`. Enter `unused` otherwise."
+      },
+      "EMAIL_FROM": {
+        "description": "Digest sender address. Postmark: a confirmed sender signature. Cloudflare Email: an address on your Email Routing domain. Fastmail: any address you own (shown as the From)."
+      },
+      "EMAIL_TO": {
+        "description": "Digest recipient address(es), comma separated. Ignored by `NOTIFIER=fastmail`, which files the digest straight into your Inbox."
+      },
+      "NOTIFIER": {
+        "description": "`fastmail`, `postmark` or `cloudflare`."
+      },
+      "DRY_RUN": {
+        "description": "`true` only logs the digest (good for a first run); `false` sends it."
+      },
+      "TIMEZONE": {
+        "description": "IANA timezone for dates in the digest, e.g. `Europe/London`."
+      },
+      "AI_MODEL": {
+        "description": "Decision model: `@cf/cloudflare/clef` (default, runs on the free Workers AI allocation), `@cf/cloudflare/clef-flash`, `google/gemini-decision-1` or `openai/decisions` (the last two need `AI_GATEWAY_ID` and AI Gateway credits)."
+      },
+      "AI_GATEWAY_ID": {
+        "description": "Optional AI Gateway name. Required for `google/gemini-decision-1` and `openai/decisions`."
+      },
+      "FASTSPAM_STATE": {
+        "description": "KV namespace for fastspam's state (reviewed message ids, the Sent-recipient index, last run time). A new one is created for you."
+      },
+      "EMAIL": {
+        "description": "Cloudflare Email binding, only used when `NOTIFIER` is `cloudflare`."
+      }
+    }
+  }
+}

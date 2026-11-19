@@ -1,0 +1,15 @@
+# Copy to .dev.vars for `wrangler dev` and the scripts. Never commit .dev.vars.
+FASTMAIL_TOKEN=
+# Only for NOTIFIER=fastmail or RESCUE_MAILBOX:
+FASTMAIL_WRITE_TOKEN=
+POSTMARK_SERVER_TOKEN=
+EMAIL_FROM=fastspam@your-domain.example
+EMAIL_TO=you@example.com
+# Settings from wrangler.jsonc "vars" can go here too: `npm run deploy` applies
+# them (never DRY_RUN), and the preview/evaluate scripts use them. For example:
+# AI_MODEL=google/gemini-decision-1
+# AI_GATEWAY_ID=your-gateway
+# TIMEZONE=Europe/London
+# Uncomment for local runs. Commented out so the Deploy to Cloudflare button
+# doesn't create a DRY_RUN secret that clashes with the DRY_RUN var.
+# DRY_RUN=true

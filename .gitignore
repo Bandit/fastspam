@@ -1,0 +1,10 @@
+node_modules/
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+dist/
+# Private evaluation data: labelled REAL messages from your own spam folder.
+# Never commit these; the README publishes aggregate scores only.
+eval-private/
+eval-results/

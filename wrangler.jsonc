@@ -1,0 +1,79 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fastspam",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  // No public URL: this Worker only runs on a schedule.
+  "workers_dev": false,
+  "preview_urls": false,
+  "triggers": {
+    // Weekly, Monday 20:00 UTC. Cron Triggers only run in UTC: pick the hour
+    // that suits your timezone (README "Schedule").
+    "crons": ["0 20 * * 1"]
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "kv_namespaces": [
+    // Dashboard name: "fastspam-state" (Storage & Databases → KV).
+    // Holds reviewed message ids, the Sent-recipient index and the last run
+    // time. Safe to delete: worst case, the last LOOKBACK_DAYS of Spam is
+    // reviewed again and the index is rebuilt.
+    // No id: `wrangler deploy` creates the namespace on first deploy and reuses
+    // it after that, so nothing account-specific is committed. (An id is not a
+    // secret, but leaving it out keeps forks deployable as-is.)
+    { "binding": "FASTSPAM_STATE" }
+  ],
+  "send_email": [
+    // Only used when NOTIFIER is "cloudflare". No destination pinned here so no
+    // address is committed; the recipient must be a verified Email Routing
+    // destination address.
+    { "name": "EMAIL" }
+  ],
+  "vars": {
+    "DRY_RUN": "false",
+    // "fastmail" (needs FASTMAIL_WRITE_TOKEN), "postmark" or "cloudflare"
+    "NOTIFIER": "fastmail",
+    // IANA timezone for dates in the digest
+    "TIMEZONE": "UTC",
+
+    // Decision model. Clef models run on the free Workers AI allocation; the
+    // google/ and openai/ models need AI_GATEWAY_ID and AI Gateway credits.
+    "AI_MODEL": "@cf/cloudflare/clef",
+    // "categories" (six-way) or "yesno" (one yes/no question per message)
+    "QUESTION_STYLE": "categories",
+    "AI_GATEWAY_ID": "",
+    // Report a model verdict when P(not spam) is at least this.
+    "CONFIDENCE_THRESHOLD": "0.6",
+    // Drop mail that fails DMARC when the sender's domain says p=quarantine/reject.
+    "HONOUR_DMARC_POLICY": "true",
+    "BATCH_SIZE": "16",
+    "MAX_MODEL_CALLS_PER_RUN": "16",
+    // Characters of message body sent to the model; 0 = never fetch the body.
+    "PREVIEW_CHARS": "200",
+
+    "LOOKBACK_DAYS": "14",
+    "MAX_EMAILS_PER_RUN": "300",
+    // Sender patterns: address, domain, or *@domain (README "Rules").
+    "ALWAYS_REPORT": "",
+    "NEVER_REPORT": "",
+    // Leave empty until the preview shows what scores your spam carries.
+    "SPAM_SCORE_SKIP_ABOVE": "",
+
+    // Optional: move fact-based suspects out of Spam into this mailbox.
+    // Needs FASTMAIL_WRITE_TOKEN. Empty = report only, never touch mail.
+    "RESCUE_MAILBOX": "",
+    "RESCUE_BASIS": "deterministic",
+    "MAX_RESCUES_PER_RUN": "20",
+
+    "SEND_WHEN_EMPTY": "true",
+    // Workers Free allows 50 subrequests per run; raise on Workers Paid.
+    "SUBREQUEST_BUDGET": "45"
+  },
+  "observability": { "enabled": true }
+  // Secrets (never in this file):
+  //   FASTMAIL_TOKEN         Fastmail API token, Read-only access
+  //   FASTMAIL_WRITE_TOKEN   optional; Email scope, for NOTIFIER=fastmail or RESCUE_MAILBOX
+  //   POSTMARK_SERVER_TOKEN  optional; NOTIFIER=postmark
+  //   EMAIL_FROM / EMAIL_TO  digest addresses (see README)
+}
