@@ -85,6 +85,8 @@
     "INCOMING_THRESHOLD": "0.7",
     "INCOMING_REPORT_MINUTES": "60",
 
+    // The Fastmail web app that digest links open in, e.g. https://app.beta.fastmail.com.
+    "FASTMAIL_URL": "https://app.fastmail.com",
     "SEND_WHEN_EMPTY": "true",
     // Workers Free allows 50 subrequests per run; raise on Workers Paid.
     "SUBREQUEST_BUDGET": "45"

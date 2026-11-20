@@ -414,6 +414,7 @@ These go in `vars` in `wrangler.jsonc`.
 | `CORRESPONDENT_MAX` | `5000` | addresses kept in the index (most recent first) |
 | `SEND_WHEN_EMPTY` | `true` | send an "all clear" digest when there is nothing to report |
 | `SUBREQUEST_BUDGET` | `45` | subrequests per run; raise on Workers Paid |
+| `FASTMAIL_URL` | `https://app.fastmail.com` | the web app links open in, for example `https://app.beta.fastmail.com` for Fastmail's beta |
 | `FASTMAIL_LINK_TEMPLATE` | see below | `{id}` `{threadId}` `{mailboxId}` `{mailboxName}` `{accountId}`; `""` for no links |
 | `JMAP_SESSION_URL` | Fastmail's | any JMAP server should work |
 
@@ -669,8 +670,9 @@ account; `npm run preview` shows what yours does:
   used, so `SPAM_HEADERS` defaults to `X-Spam-score`. If your server puts the score in another
   header, list it there; missing headers are ignored.
 - **Link format.** Fastmail doesn't document its web app's URLs. The default
-  `FASTMAIL_LINK_TEMPLATE`, `https://app.fastmail.com/mail/{mailboxName}/{threadId}.{id}`, was
-  checked on a real account and opens the message (Fastmail adds its own `?u=` account
+  `FASTMAIL_LINK_TEMPLATE`, `https://app.fastmail.com/mail/{mailboxName}/{threadId}.{id}`
+  (on `FASTMAIL_URL`, if you set that), was checked on a real account and opens the message, in
+  Spam and in other folders (Fastmail adds its own `?u=` account
   parameter on the way). If Fastmail changes its URLs, set the template to match, or to `""`.
 - **Clef through AI Gateway** works, although Clef's documentation doesn't mention it. Mind the
   billing note in [AI Gateway setup](#3-ai-gateway-optional-needed-for-the-google-and-openai-models).

@@ -10,6 +10,7 @@ EMAIL_TO=you@example.com
 # AI_MODEL=google/gemini-decision-1
 # AI_GATEWAY_ID=your-gateway
 # TIMEZONE=Europe/London
+# FASTMAIL_URL=https://app.beta.fastmail.com
 # Uncomment for local runs. Commented out so the Deploy to Cloudflare button
 # doesn't create a DRY_RUN secret that clashes with the DRY_RUN var.
 # DRY_RUN=true

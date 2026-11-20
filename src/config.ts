@@ -14,7 +14,7 @@ export interface Config {
   postmarkStream: string;
 
   jmapSessionUrl: string;
-  /** Placeholders: {id} {threadId} {mailboxId} {mailboxName} {accountId}. Empty = no links. */
+  /** Placeholders: {id} {threadId} {mailboxId} {mailboxName} {accountId}. Empty = no links. Defaults to FASTMAIL_URL + the message path. */
   linkTemplate: string;
   spamMailbox: string;
   sentMailbox: string;
@@ -122,7 +122,25 @@ export function digestDays(v: unknown): number[] {
  * but nothing reads it, and fetching it was about a quarter of the Spam fetch.
  */
 export const DEFAULT_SPAM_HEADERS = ["X-Spam-score"];
-export const DEFAULT_LINK_TEMPLATE = "https://app.fastmail.com/mail/{mailboxName}/{threadId}.{id}";
+export const DEFAULT_FASTMAIL_URL = "https://app.fastmail.com";
+const LINK_PATH = "/mail/{mailboxName}/{threadId}.{id}";
+export const DEFAULT_LINK_TEMPLATE = DEFAULT_FASTMAIL_URL + LINK_PATH;
+
+/**
+ * FASTMAIL_URL: the web app links open in, e.g. https://app.beta.fastmail.com
+ * for Fastmail's beta. The scheme is optional; only http(s) is accepted.
+ */
+export function fastmailUrl(v: unknown): string {
+  const raw = str(v, DEFAULT_FASTMAIL_URL);
+  let url: URL;
+  try {
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
+  } catch {
+    throw new Error(`FASTMAIL_URL "${raw}" is not a URL; use something like https://app.fastmail.com`);
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error(`FASTMAIL_URL must be an http(s) address, not "${raw}"`);
+  return `${url.origin}${url.pathname}`.replace(/\/+$/, "");
+}
 
 /** "promotional:0.8, important:0.5" → per-tier overrides. Unknown tiers and bad numbers are ignored. */
 export function tierThresholds(v: unknown, fallback: number): Thresholds {
@@ -149,7 +167,8 @@ export function loadConfig(env: Env): Config {
     postmarkStream: str(env.POSTMARK_MESSAGE_STREAM, "outbound"),
 
     jmapSessionUrl: str(env.JMAP_SESSION_URL, "https://api.fastmail.com/jmap/session"),
-    linkTemplate: env.FASTMAIL_LINK_TEMPLATE === undefined ? DEFAULT_LINK_TEMPLATE : String(env.FASTMAIL_LINK_TEMPLATE).trim(),
+    // An explicit FASTMAIL_LINK_TEMPLATE wins; otherwise the default path on FASTMAIL_URL.
+    linkTemplate: env.FASTMAIL_LINK_TEMPLATE === undefined ? fastmailUrl(env.FASTMAIL_URL) + LINK_PATH : String(env.FASTMAIL_LINK_TEMPLATE).trim(),
     spamMailbox: str(env.SPAM_MAILBOX),
     sentMailbox: str(env.SENT_MAILBOX),
     rescueMailbox: str(env.RESCUE_MAILBOX),

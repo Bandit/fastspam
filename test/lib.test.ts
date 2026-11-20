@@ -125,4 +125,16 @@ describe("config", () => {
     expect(c.emailTo).toEqual([]);
     expect(loadConfig({ FASTSPAM_STATE: {} as KVNamespace, EMAIL_FROM: "me@x.example", EMAIL_TO: "a@x.example, unused" }).emailTo).toEqual(["a@x.example"]);
   });
+
+  it("builds links on FASTMAIL_URL unless FASTMAIL_LINK_TEMPLATE is set", async () => {
+    const { loadConfig } = await import("../src/config.ts");
+    const link = (env: Record<string, string>) => loadConfig({ FASTSPAM_STATE: {} as KVNamespace, ...env }).linkTemplate;
+    expect(link({})).toBe("https://app.fastmail.com/mail/{mailboxName}/{threadId}.{id}");
+    expect(link({ FASTMAIL_URL: "app.beta.fastmail.com" })).toBe("https://app.beta.fastmail.com/mail/{mailboxName}/{threadId}.{id}");
+    expect(link({ FASTMAIL_URL: "https://app.beta.fastmail.com/" })).toBe("https://app.beta.fastmail.com/mail/{mailboxName}/{threadId}.{id}");
+    expect(link({ FASTMAIL_URL: "https://mail.example/fm" })).toBe("https://mail.example/fm/mail/{mailboxName}/{threadId}.{id}");
+    expect(link({ FASTMAIL_URL: "https://app.beta.fastmail.com", FASTMAIL_LINK_TEMPLATE: "" })).toBe("");
+    expect(link({ FASTMAIL_URL: "https://app.beta.fastmail.com", FASTMAIL_LINK_TEMPLATE: "https://x.example/{id}" })).toBe("https://x.example/{id}");
+    expect(() => link({ FASTMAIL_URL: "javascript:alert(1)" })).toThrow(/http/);
+  });
 });
