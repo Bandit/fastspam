@@ -1,6 +1,7 @@
 import { TIERS, type Candidate, type RescueResult, type Tier } from "../types.ts";
 import type { Message } from "../notify/notifier.ts";
-import type { PendingSuspect } from "./state.ts";
+import type { Failure, PendingSuspect } from "./state.ts";
+import { failureFormatter } from "./alert.ts";
 import { clean, LIMITS } from "./sanitise.ts";
 import { dateFormatter, isoDate } from "./time.ts";
 
@@ -15,7 +16,7 @@ export interface RunStats {
   sentToModel: number;
   modelCalls: number;
   model: string;
-  failures: string[];
+  failures: Failure[];
   notes: string[];
   /** Set while the first pass through Spam is still running. */
   backlog?: { reviewedThrough: Date | null; remaining: number | null };
@@ -152,8 +153,9 @@ export function renderDigest(input: DigestInput): Message | null {
   }
   for (const n of stats.notes) lines.push(`Note: ${n}`);
   if (stats.failures.length) {
-    lines.push("", "Problems this run:");
-    for (const f of stats.failures) lines.push(`  ! ${f}`);
+    lines.push("", "Problems since the last digest:");
+    const failure = failureFormatter(input.timezone);
+    for (const f of stats.failures) lines.push(`  ! ${failure(f)}`);
   }
 
   const date = isoDate(input.now, input.timezone);

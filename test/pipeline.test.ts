@@ -207,7 +207,7 @@ describe("work runs", () => {
     await workUntilIdle(env, fake);
     env.FASTMAIL_TOKEN = "revoked";
     await expect(run(env, at(START, 15), { fetchImpl: fake.fetch, ...quiet })).rejects.toThrow(/HTTP 401/);
-    expect(jobOf(env).stats.failures.join(" ")).toMatch(/HTTP 401/);
+    expect(jobOf(env).stats.failures.map((f) => f.message).join(" ")).toMatch(/HTTP 401/);
     // Progress made before the failure is kept.
     expect(jobOf(env).pending).toHaveLength(4);
   });
@@ -290,7 +290,7 @@ describe("rescue", () => {
     const env = testEnv({ AI: new FakeAi(), RESCUE_MAILBOX: "Rescued", FASTMAIL_WRITE_TOKEN: "write-token" });
     const runs = await workUntilIdle(env, fake);
     expect(runs.some((r) => r.rescue)).toBe(false);
-    expect(jobOf(env).stats.failures.join(" ")).toMatch(/different account/);
+    expect(jobOf(env).stats.failures.map((f) => f.message).join(" ")).toMatch(/different account/);
     expect(fake.calls.filter((c) => c.name === "Email/set")).toHaveLength(0);
   });
 });
@@ -420,5 +420,66 @@ describe("the digest", () => {
     const { fake, env } = world();
     env.NOTIFIER = "fastmail";
     await expect(digest(env, SLOT, { fetchImpl: fake.fetch, ...quiet })).rejects.toThrow(/FASTMAIL_WRITE_TOKEN/);
+  });
+});
+
+describe("alerts about repeated failures", () => {
+  /** Index Sent first, then make every model call fail. */
+  async function failing() {
+    const w = world();
+    const notifier = new Recorder();
+    await work(w.env, START, { fetchImpl: w.fake.fetch, ...quiet }); // indexes Sent; Spam is next
+    (w.ai as FakeAi).failWith = new Error("7003: User Input Error");
+    const go = (minutes: number) => run(w.env, at(START, minutes), { fetchImpl: w.fake.fetch, notifier, ...quiet });
+    return { ...w, notifier, go };
+  }
+
+  it("counts a repeated failure and when it last happened", async () => {
+    const { env, go } = await failing();
+    await go(15);
+    await go(30);
+    const f = jobOf(env).stats.failures;
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatchObject({ count: 2, last: at(START, 30).toISOString() });
+    expect(f[0]!.message).toMatch(/7003/);
+  });
+
+  it("alerts after three failed runs in a row, then at most daily", async () => {
+    const { go, notifier } = await failing();
+    expect((await go(15)).kind).toBe("work");
+    expect((await go(30)).kind).toBe("work");
+    expect(notifier.sent).toHaveLength(0);
+    expect((await go(45)).kind).toBe("work");
+    const alert = await go(60);
+    expect(alert).toMatchObject({ kind: "alert", sent: true, runs: 3 });
+    expect(notifier.sent[0]!.subject).toMatch(/^\[fastspam\] problem: .*7003/);
+    expect(notifier.sent[0]!.text).toMatch(/3 runs in a row/);
+    expect(notifier.sent[0]!.text).toMatch(/7003: User Input Error .*\(3 times, last Mon 23 Nov, 12:45 UTC\)/);
+    // Still failing, but no second alert the same day.
+    for (const m of [75, 90, 105]) expect((await go(m)).kind).toBe("work");
+    expect(notifier.sent).toHaveLength(1);
+  });
+
+  it("doesn't alert about a one-off, and a clean run starts the count again", async () => {
+    const { env, ai, go, notifier } = await failing();
+    await go(15);
+    await go(30);
+    (ai as FakeAi).failWith = undefined;
+    await go(45);
+    expect(jobOf(env).failStreak).toBeUndefined();
+    (ai as FakeAi).failWith = new Error("7003: User Input Error");
+    await go(60);
+    await go(75);
+    expect((await go(90)).kind).toBe("work");
+    expect(notifier.sent).toHaveLength(0);
+  });
+
+  it("a broken notifier can't take over every run", async () => {
+    const { go, notifier, env } = await failing();
+    for (const m of [15, 30, 45]) await go(m);
+    notifier.fail = true;
+    await expect(go(60)).rejects.toThrow(/smtp down/);
+    expect(jobOf(env).stats.failures.map((f) => f.message).join(" ")).toMatch(/an alert could not be sent/);
+    expect((await go(75)).kind).toBe("work");
   });
 });

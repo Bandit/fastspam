@@ -9,6 +9,7 @@ import { threadsWithRealMail, threadsWithYourMail } from "./jmap/threads.ts";
 import { FASTSPAM_HEADER } from "./jmap/append.ts";
 import { decideIncoming } from "./incoming.ts";
 import { renderIncomingReport } from "./lib/incoming-report.ts";
+import { renderAlert } from "./lib/alert.ts";
 import { applySent, emptyIndex, lookup, SENT_PROPERTIES, type SentRow } from "./jmap/correspondents.ts";
 import { rescue } from "./jmap/rescue.ts";
 import { decide } from "./decide.ts";
@@ -22,6 +23,8 @@ import {
   KEYS,
   newJob,
   readJson,
+  recordFailures,
+  upgradeFailures,
   writeJson,
   type CorrespondentIndex,
   type Edge,
@@ -71,6 +74,10 @@ const MAX_PENDING = 500;
 /** Incoming messages checked per run, and finds kept for the next incoming report. */
 const INCOMING_SLICE = 40;
 const MAX_INCOMING_PENDING = 100;
+/** Work runs in a row with a problem before an alert goes out (45 minutes at the default cron). */
+const ALERT_AFTER_RUNS = 3;
+/** While the problem lasts, the alert repeats at most this often. */
+const ALERT_REPEAT_MS = 24 * 60 * MINUTE;
 
 export interface RunOptions {
   fetchImpl?: FetchImpl;
@@ -131,7 +138,15 @@ export interface IncomingReport {
   subrequests: number;
 }
 
-export type RunReport = WorkReport | DigestReport | IncomingReport;
+export interface AlertReport {
+  kind: "alert";
+  message: Message;
+  sent: boolean;
+  runs: number;
+  subrequests: number;
+}
+
+export type RunReport = WorkReport | DigestReport | IncomingReport | AlertReport;
 
 interface Context {
   env: Env;
@@ -161,7 +176,9 @@ function context(env: Env, opts: RunOptions): Context {
 
 async function loadJob(ctx: Context, now: Date): Promise<JobState> {
   const job = await readJson<JobState>(ctx.kv, KEYS.job, ctx.budget);
-  return job?.v === 1 ? job : newJob(now);
+  if (job?.v !== 1) return newJob(now);
+  job.stats.failures = upgradeFailures(job.stats.failures);
+  return job;
 }
 
 function digestSchedule(config: Config): DigestSchedule {
@@ -204,12 +221,23 @@ export function incomingReportDue(job: JobState, config: Config, now: Date): boo
   return !inc.lastReportAt || now.getTime() - Date.parse(inc.lastReportAt) >= config.incomingReportMinutes * MINUTE;
 }
 
-/** The scheduled entry point: the weekly digest if due, else the incoming report if due, else a slice of work. */
+/** Whether work runs have kept failing long enough to alert, and no alert went out for it today. */
+export function alertDue(job: JobState, now: Date): boolean {
+  const streak = job.failStreak;
+  if (!streak || streak.runs < ALERT_AFTER_RUNS) return false;
+  return !streak.alertedAt || now.getTime() - Date.parse(streak.alertedAt) >= ALERT_REPEAT_MS;
+}
+
+/**
+ * The scheduled entry point, one thing per run: the weekly digest if due, else
+ * an alert about repeated failures, else the incoming report, else work.
+ */
 export async function run(env: Env, now: Date, opts: RunOptions = {}): Promise<RunReport> {
   const ctx = context(env, opts);
   const job = await loadJob(ctx, now);
   const { due, planned } = digestTiming(job, ctx.config, now);
   if (due) return sendDigest(ctx, job, now);
+  if (alertDue(job, now)) return sendAlert(ctx, job, now);
   if (incomingReportDue(job, ctx.config, now)) return sendIncomingReport(ctx, job, now);
   return doWork(ctx, job, now, planned);
 }
@@ -277,7 +305,8 @@ async function doWork(ctx: Context, saved: JobState, now: Date, dirty = false): 
     return await workSlices(ctx, job, now, dirty);
   } catch (err) {
     if (!ctx.opts.readOnly) {
-      addLines(saved.stats.failures, [errorMessage(err)]);
+      recordFailures(saved.stats.failures, [errorMessage(err)], now);
+      countFailedRun(saved, true, now);
       try {
         await writeJson(ctx.kv, KEYS.job, saved);
       } catch {
@@ -452,9 +481,9 @@ async function workSlices(ctx: Context, job: JobState, now: Date, dirty: boolean
     }
   }
 
-  const failuresBefore = job.stats.failures.length;
-  addLines(job.stats.failures, report.failures);
-  jobChanged ||= job.stats.failures.length !== failuresBefore || job.stats.notes.length !== linesBefore;
+  recordFailures(job.stats.failures, report.failures, now);
+  jobChanged ||= report.failures.length > 0 || job.stats.notes.length !== linesBefore;
+  if (countFailedRun(job, report.failures.length > 0, now)) jobChanged = true;
   // Index first, job second: if the job write is lost, the next run redoes the
   // same Sent page, which is harmless. Not enforced against the soft budget:
   // the work is done, and a refused write would only repeat it.
@@ -699,7 +728,7 @@ async function sendDigest(ctx: Context, job: JobState, now: Date): Promise<Diges
     } catch (err) {
       // Retried by a later run (at most hourly); nothing is cleared.
       job.digestFailedAt = now.toISOString();
-      addLines(job.stats.failures, [`the last digest could not be sent: ${errorMessage(err)}`]);
+      recordFailures(job.stats.failures, [`the last digest could not be sent: ${errorMessage(err)}`], now);
       await writeJson(ctx.kv, KEYS.job, job);
       throw err;
     }
@@ -976,7 +1005,7 @@ async function sendIncomingReport(ctx: Context, job: JobState, now: Date): Promi
       await makeNotifier(ctx.env, config, ctx.opts, budget).send(report.message);
     } catch (err) {
       inc.reportFailedAt = now.toISOString();
-      addLines(job.stats.failures, [`an incoming report could not be sent: ${errorMessage(err)}`]);
+      recordFailures(job.stats.failures, [`an incoming report could not be sent: ${errorMessage(err)}`], now);
       await writeJson(ctx.kv, KEYS.job, job);
       throw err;
     }
@@ -991,6 +1020,49 @@ async function sendIncomingReport(ctx: Context, job: JobState, now: Date): Promi
   await writeJson(ctx.kv, KEYS.job, job);
   budget.charge();
   report.subrequests = budget.used;
+  return report;
+}
+
+// ---------------------------------------------------------------- alerts
+
+/** Count a work run towards (or end) a run of failures. Returns whether the job changed. */
+function countFailedRun(job: JobState, failed: boolean, now: Date): boolean {
+  if (!failed) {
+    if (!job.failStreak) return false;
+    delete job.failStreak;
+    return true;
+  }
+  job.failStreak = job.failStreak ? { ...job.failStreak, runs: job.failStreak.runs + 1 } : { runs: 1, since: now.toISOString() };
+  return true;
+}
+
+/** Tell you about failures that keep happening, rather than waiting for the weekly digest. */
+async function sendAlert(ctx: Context, job: JobState, now: Date): Promise<AlertReport> {
+  const streak = job.failStreak!;
+  const since = Date.parse(streak.since);
+  const recent = job.stats.failures.filter((f) => f.last && Date.parse(f.last) >= since);
+  const message = renderAlert({
+    failures: recent.length ? recent : job.stats.failures,
+    runs: streak.runs,
+    since: new Date(since),
+    timezone: ctx.config.timezone,
+  });
+  const report: AlertReport = { kind: "alert", message, sent: false, runs: streak.runs, subrequests: ctx.budget.used };
+  if (ctx.opts.readOnly) return report;
+  // Marked as alerted even if sending fails, so a broken notifier can't take
+  // over every run; the next try is a day later.
+  streak.alertedAt = now.toISOString();
+  try {
+    await makeNotifier(ctx.env, ctx.config, ctx.opts, ctx.budget).send(message);
+    report.sent = true;
+  } catch (err) {
+    recordFailures(job.stats.failures, [`an alert could not be sent: ${errorMessage(err)}`], now);
+    await writeJson(ctx.kv, KEYS.job, job);
+    throw err;
+  }
+  await writeJson(ctx.kv, KEYS.job, job);
+  ctx.budget.charge();
+  report.subrequests = ctx.budget.used;
   return report;
 }
 

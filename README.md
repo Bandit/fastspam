@@ -310,14 +310,19 @@ example `Europe/London`) so the digest goes out at your local time and shows loc
 
 ### Schedule
 
-One cron runs every 15 minutes (`*/15 * * * *` in `wrangler.jsonc`). Each run does one of two
-things:
+One cron runs every 15 minutes (`*/15 * * * *` in `wrangler.jsonc`). Each run does one thing:
 
 - **If a digest is due, it sends the digest.** The digest goes out at `DIGEST_HOUR` (20) on
   `DIGEST_DAYS` (`mon`) in `TIMEZONE`. Because this is worked out in code rather than by cron
   (which only knows UTC), the time stays put across daylight-saving changes. A run that misses
   the time, or fails to send, is caught up by a later run; a failed send is retried at most
   hourly. A new installation sends its first digest at the first digest time after it starts.
+- **If the last three runs of work all hit a problem, it sends an alert** listing the problems,
+  so something lasting (a revoked token, a model that keeps refusing a message) doesn't wait for
+  the weekly digest. A one-off, which the next run usually retries successfully, doesn't alert.
+  While the problem lasts, the alert repeats at most daily.
+- **If the [incoming check](#incoming-check-experimental) found something**, and the last
+  incoming report was at least `INCOMING_REPORT_MINUTES` ago, it sends the incoming report.
 - **Otherwise it does one small slice of work**, sized to fit the Workers Free CPU limit:
   1. **Indexing Sent, newest first, `SENT_PAGE` (200) messages per run**, until all of it is
      indexed. Nothing in Spam is reviewed until then, because a message reviewed early would
@@ -329,6 +334,8 @@ things:
      the last ten minutes is left for the next run, in case it isn't visible to searches yet.
 
 A run with nothing to do reads one KV value, asks Fastmail if anything is new, and stops.
+Every problem is also kept for the weekly digest, with how many times it happened and when it
+last did, and each run logs a one-line summary to Workers Logs.
 While the first passes are running, the digest shows how far they have got. On Workers Paid,
 `MAX_SLICES_PER_RUN` lets one run do several slices.
 

@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { clean, cleanAddress, domainOf } from "../src/lib/sanitise.ts";
 import { matchesAny, matchesPattern } from "../src/lib/match.ts";
 import { firstHeader, isValidHeaderName, parseAuthResults, parseSpamScore } from "../src/lib/headers.ts";
-import { addLines } from "../src/lib/state.ts";
+import { addLines, recordFailures, upgradeFailures, type Failure } from "../src/lib/state.ts";
+import { failureFormatter } from "../src/lib/alert.ts";
 import { Budget, BudgetExceededError } from "../src/lib/budget.ts";
 
 describe("sanitise", () => {
@@ -136,5 +137,33 @@ describe("config", () => {
     expect(link({ FASTMAIL_URL: "https://app.beta.fastmail.com", FASTMAIL_LINK_TEMPLATE: "" })).toBe("");
     expect(link({ FASTMAIL_URL: "https://app.beta.fastmail.com", FASTMAIL_LINK_TEMPLATE: "https://x.example/{id}" })).toBe("https://x.example/{id}");
     expect(() => link({ FASTMAIL_URL: "javascript:alert(1)" })).toThrow(/http/);
+  });
+});
+
+describe("failures", () => {
+  it("counts repeats, keeps the latest time, and caps distinct problems", () => {
+    const list: Failure[] = [];
+    recordFailures(list, ["a", "b"], new Date("2026-11-20T03:30:00Z"));
+    recordFailures(list, ["a"], new Date("2026-11-20T03:45:00Z"));
+    expect(list).toEqual([
+      { message: "a", count: 2, last: "2026-11-20T03:45:00.000Z" },
+      { message: "b", count: 1, last: "2026-11-20T03:30:00.000Z" },
+    ]);
+    recordFailures(list, Array.from({ length: 30 }, (_, i) => `x${i}`), new Date());
+    expect(list).toHaveLength(20);
+  });
+
+  it("reads failures stored as plain strings", () => {
+    expect(upgradeFailures(["old", { message: "new", count: 2 }])).toEqual([
+      { message: "old", count: 1 },
+      { message: "new", count: 2 },
+    ]);
+  });
+
+  it("formats a failure with its count and time", () => {
+    const f = failureFormatter("UTC");
+    expect(f({ message: "boom", count: 3, last: "2026-11-20T03:30:00Z" })).toBe("boom (3 times, last Fri 20 Nov, 03:30 UTC)");
+    expect(f({ message: "boom", count: 1, last: "2026-11-20T03:30:00Z" })).toBe("boom (Fri 20 Nov, 03:30 UTC)");
+    expect(f({ message: "boom", count: 1 })).toBe("boom");
   });
 });

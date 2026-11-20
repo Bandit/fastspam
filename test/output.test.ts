@@ -63,7 +63,7 @@ describe("digest", () => {
     expect(renderDigest({ ...base, sendWhenEmpty: false, suspects: [], stats: stats() })).toBeNull();
   });
   it("still sends when there were problems, even if empty", () => {
-    const m = renderDigest({ ...base, sendWhenEmpty: false, suspects: [], stats: stats({ failures: ["boom"] }) });
+    const m = renderDigest({ ...base, sendWhenEmpty: false, suspects: [], stats: stats({ failures: [{ message: "boom", count: 1 }] }) });
     expect(m?.subject).toMatch(/with problems/);
     expect(m?.text).toContain("! boom");
   });

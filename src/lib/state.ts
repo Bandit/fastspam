@@ -43,14 +43,22 @@ export interface PendingSuspect {
   moved?: boolean;
 }
 
+/** A problem, counted each time it recurs. */
+export interface Failure {
+  message: string;
+  count: number;
+  /** When it last happened (ISO). Absent for failures stored before this was recorded. */
+  last?: string;
+}
+
 export interface PeriodStats {
   reviewed: number;
   droppedByRule: number;
   settledByFact: number;
   sentToModel: number;
   modelCalls: number;
-  /** Deduplicated, capped. */
-  failures: string[];
+  /** Deduplicated by message and counted; capped. */
+  failures: Failure[];
   notes: string[];
 }
 
@@ -141,6 +149,8 @@ export interface JobState {
   stats: PeriodStats;
   /** Present once INCOMING_MAILBOXES is set. */
   incoming?: IncomingState;
+  /** Work runs in a row that hit a problem, and when the first of them ran. */
+  failStreak?: { runs: number; since: string; alertedAt?: string };
 }
 
 export function emptyStats(): PeriodStats {
@@ -166,6 +176,24 @@ const MAX_MESSAGES = 20;
 /** Add failure or note lines, deduplicated and capped so state can't grow without bound. */
 export function addLines(target: string[], lines: readonly string[]): void {
   for (const l of lines) if (!target.includes(l) && target.length < MAX_MESSAGES) target.push(l);
+}
+
+/** Record problems: a repeat bumps its count and time, a new one is added while there's room. */
+export function recordFailures(target: Failure[], messages: readonly string[], now: Date): void {
+  for (const message of messages) {
+    const hit = target.find((f) => f.message === message);
+    if (hit) {
+      hit.count++;
+      hit.last = now.toISOString();
+    } else if (target.length < MAX_MESSAGES) {
+      target.push({ message, count: 1, last: now.toISOString() });
+    }
+  }
+}
+
+/** Failures as stored before they were counted were plain strings. */
+export function upgradeFailures(list: readonly unknown[]): Failure[] {
+  return list.map((f) => (typeof f === "string" ? { message: f, count: 1 } : (f as Failure)));
 }
 
 export async function readJson<T>(kv: KVNamespace, key: string, budget?: Budget): Promise<T | undefined> {
