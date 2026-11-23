@@ -5,7 +5,8 @@
  * (the base rate is the other way round here: most incoming mail is
  * legitimate, so a loose threshold would be noisy).
  *
- * Read-only: nothing here changes mail.
+ * Nothing here changes mail; moving finds to QUARANTINE_MAILBOX is
+ * jmap/quarantine.ts, and only when that is set.
  */
 import type { Candidate } from "./types.ts";
 import type { CorrespondentLookup } from "./jmap/correspondents.ts";

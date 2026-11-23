@@ -77,6 +77,10 @@ export interface IncomingFind {
   detail: string;
   /** P(spam) from the model. */
   pSpam?: number;
+  /** Moved to this mailbox (QUARANTINE_MAILBOX). */
+  movedTo?: string;
+  /** Why it was eligible for quarantine but not moved. */
+  notMoved?: string;
 }
 
 export interface IncomingStats {
@@ -85,6 +89,8 @@ export interface IncomingStats {
   sentToModel: number;
   modelCalls: number;
   flagged: number;
+  /** Absent in state saved before quarantine existed. */
+  quarantined?: number;
 }
 
 /** The incoming check (experimental): its own position, finds and stats. */
@@ -104,10 +110,12 @@ export interface IncomingState {
   stats: IncomingStats;
   /** Since the last weekly digest. */
   week: IncomingStats;
+  /** Messages quarantined on `day` (UTC date), for MAX_QUARANTINE_PER_DAY. */
+  quarantine?: { day: string; count: number };
 }
 
 export function emptyIncomingStats(): IncomingStats {
-  return { checked: 0, settledByFact: 0, sentToModel: 0, modelCalls: 0, flagged: 0 };
+  return { checked: 0, settledByFact: 0, sentToModel: 0, modelCalls: 0, flagged: 0, quarantined: 0 };
 }
 
 export interface JobState {

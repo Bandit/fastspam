@@ -90,7 +90,7 @@ describe("incoming check", () => {
 
     const r = (await s.go(20)) as WorkReport;
     expect(r.kind).toBe("work");
-    expect(r.incoming).toEqual({ checked: 5, settledByFact: 2, sentToModel: 2, modelCalls: 1, flagged: 2 });
+    expect(r.incoming).toEqual({ checked: 5, settledByFact: 2, sentToModel: 2, modelCalls: 1, flagged: 2, quarantined: 0 });
     // Only the cold senders reached the model, framed as incoming mail.
     const payload = String(s.ai.calls[0]!.input.input ?? s.ai.calls[0]!.input.state);
     expect([...payloadMessages(payload).values()].map((m) => m.from_address).sort()).toEqual(["news@letters.example", "security@account-verify.example"]);
@@ -195,4 +195,90 @@ it("work() alone never sends an incoming report", async () => {
   await s.go(15);
   await work(s.env, at(30), { fetchImpl: s.fake.fetch, notifier: s.notifier, ...quiet });
   expect(s.notifier.sent).toHaveLength(0);
+});
+
+describe("quarantine", () => {
+  const QBOXES = [...BOXES, { id: "mb-q", name: "Quarantine", role: null, parentId: null }];
+  function qsetup(over: Record<string, unknown> = {}) {
+    const s = setup({ QUARANTINE_MAILBOX: "Quarantine", FASTMAIL_WRITE_TOKEN: "write-token", ...over });
+    s.fake.mailboxes = QBOXES;
+    // P(spam) by subject: "Verify" 0.95, "Account suspended" 0.8 (flagged at 0.7, not quarantined at 0.9).
+    s.ai.judge = (m) =>
+      /verify/i.test(m.subject)
+        ? { choice: "spam", probabilities: dist("spam", 0.95) }
+        : /suspended/i.test(m.subject)
+          ? { choice: "spam", probabilities: dist("spam", 0.8) }
+          : { choice: "newsletter", probabilities: dist("newsletter", 0.8) };
+    return s;
+  }
+
+  it("moves facts and confident model finds, leaves the rest, and reports both", async () => {
+    const s = qsetup();
+    await started(s);
+    const sure = arriving(1, "a@scam.example", "Verify your account", { mailboxIds: { "mb-work-in": true, "mb-archive": true } });
+    const unsure = arriving(2, "b@scam.example", "Account suspended");
+    const forged = arriving(3, "ceo@client.example", "Urgent wire", {
+      headers: { "authentication-results": ["mx.messagingengine.com; dmarc=fail policy.published-domain-policy=reject header.from=client.example"] },
+    });
+    const fine = arriving(4, "news@letters.example", "Gardening");
+    s.fake.emails.push(sure, unsure, forged, fine);
+
+    const r = (await s.go(20)) as WorkReport;
+    expect(r.incoming).toMatchObject({ flagged: 3, quarantined: 2 });
+    // Only the checked folder's membership changes; other folders stay.
+    expect(sure.mailboxIds).toEqual({ "mb-q": true, "mb-archive": true });
+    expect(forged.mailboxIds).toEqual({ "mb-q": true });
+    expect(unsure.mailboxIds).toEqual({ "mb-inbox": true });
+    expect(fine.mailboxIds).toEqual({ "mb-inbox": true });
+    const sets = s.fake.calls.filter((c) => c.name === "Email/set");
+    expect(sets.every((c) => c.token === "write-token" && !("destroy" in c.args))).toBe(true);
+
+    await s.go(35);
+    const m = s.notifier.sent[0]!;
+    expect(m.subject).toMatch(/3 possible spam in your mail, 2 quarantined/);
+    expect(m.text).toMatch(/MOVED TO QUARANTINE \(2\)[\s\S]*Work\/Inbox → Quarantine[\s\S]*LEFT WHERE THEY ARE \(1\)[\s\S]*Account suspended/);
+  });
+
+  it("is report-only without QUARANTINE_MAILBOX, and in DRY_RUN", async () => {
+    for (const over of [{ QUARANTINE_MAILBOX: "" }, { DRY_RUN: "true" }]) {
+      const s = qsetup(over);
+      await started(s);
+      const sure = arriving(1, "a@scam.example", "Verify your account");
+      s.fake.emails.push(sure);
+      expect(((await s.go(20)) as WorkReport).incoming).toMatchObject({ flagged: 1, quarantined: 0 });
+      expect(sure.mailboxIds).toEqual({ "mb-inbox": true });
+      expect(s.fake.calls.some((c) => c.name === "Email/set")).toBe(false);
+    }
+  });
+
+  it("stops at MAX_QUARANTINE_PER_DAY and says why in the report", async () => {
+    const s = qsetup({ MAX_QUARANTINE_PER_DAY: "1" });
+    await started(s);
+    const one = arriving(1, "a@scam.example", "Verify one");
+    const two = arriving(2, "b@scam.example", "Verify two");
+    s.fake.emails.push(one, two);
+    expect(((await s.go(20)) as WorkReport).incoming).toMatchObject({ flagged: 2, quarantined: 1 });
+    expect(two.mailboxIds).toEqual({ "mb-inbox": true });
+    await s.go(35);
+    expect(s.notifier.sent[0]!.text).toContain("not moved: MAX_QUARANTINE_PER_DAY reached");
+  });
+
+  it("leaves a quarantined message out of the report once you move it back", async () => {
+    const s = qsetup();
+    await started(s);
+    const sure = arriving(1, "a@scam.example", "Verify your account");
+    s.fake.emails.push(sure);
+    await s.go(20);
+    sure.mailboxIds = { "mb-inbox": true };
+    expect(await s.go(35)).toMatchObject({ kind: "incoming-report", sent: false, dealtWith: 1 });
+  });
+
+  it("records a failure and still reports when the write token is missing", async () => {
+    const s = qsetup({ FASTMAIL_WRITE_TOKEN: "" });
+    await started(s);
+    s.fake.emails.push(arriving(1, "a@scam.example", "Verify your account"));
+    const r = (await s.go(20)) as WorkReport;
+    expect(r.failures.join(" ")).toMatch(/quarantine failed: FASTMAIL_WRITE_TOKEN/);
+    expect(r.incoming).toMatchObject({ flagged: 1, quarantined: 0 });
+  });
 });

@@ -258,3 +258,10 @@ describe("digest append", () => {
     expect((fake.created[0] as { bodyValues: { body: { value: string } } }).bodyValues.body.value).toMatch(/^\(DIGEST_MAILBOX "Renamed" wasn't found/);
   });
 });
+
+describe("quarantine (the incoming check's one write)", () => {
+  it("refuses a quarantine folder that is also a checked folder", async () => {
+    const { quarantine } = await import("../src/jmap/quarantine.ts");
+    await expect(quarantine(client(new FakeJmap(), "write-token"), ["M1"], { fromIds: ["mb-inbox"], quarantineId: "mb-inbox", max: 5 })).rejects.toThrow(/must not be one of/);
+  });
+});

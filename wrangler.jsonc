@@ -77,13 +77,18 @@
     "RESCUE_BASIS": "deterministic",
     "MAX_RESCUES_PER_DIGEST": "20",
 
-    // Experimental: also check these folders for spam, scams and phishing
-    // the filter let through, and report finds at most every
-    // INCOMING_REPORT_MINUTES. Read-only. Empty = off (README "Incoming check").
+    // Also check these folders for spam, scams and phishing the filter let
+    // through, and report finds at most every INCOMING_REPORT_MINUTES.
+    // Empty = off (README "Checking incoming mail").
     "INCOMING_MAILBOXES": "",
     "INCOMING_SKIP_READ": "false",
     "INCOMING_THRESHOLD": "0.7",
     "INCOMING_REPORT_MINUTES": "60",
+    // Optional: move the clearest finds into this folder. Needs
+    // FASTMAIL_WRITE_TOKEN. Empty = report only (README "Quarantine").
+    "QUARANTINE_MAILBOX": "",
+    "QUARANTINE_THRESHOLD": "0.9",
+    "MAX_QUARANTINE_PER_DAY": "20",
 
     // NOTIFIER=fastmail only: the folder digests, reports and alerts are filed
     // in (name or path). Empty = the Inbox. Fastmail rules don't run on them.
@@ -97,7 +102,7 @@
   "observability": { "enabled": true }
   // Secrets (never in this file):
   //   FASTMAIL_TOKEN         Fastmail API token, Read-only access
-  //   FASTMAIL_WRITE_TOKEN   optional; Email scope, for NOTIFIER=fastmail or RESCUE_MAILBOX
+  //   FASTMAIL_WRITE_TOKEN   optional; Email scope, for NOTIFIER=fastmail, RESCUE_MAILBOX or QUARANTINE_MAILBOX
   //   POSTMARK_SERVER_TOKEN  optional; NOTIFIER=postmark
   //   EMAIL_FROM / EMAIL_TO  digest addresses (see README)
 }

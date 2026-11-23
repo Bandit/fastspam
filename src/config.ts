@@ -61,7 +61,7 @@ export interface Config {
   maxRescuesPerDigest: number;
 
   /**
-   * Folders checked for spam the filter let through (experimental, read-only).
+   * Folders checked for spam the filter let through.
    * Empty = off. Ids, names or paths; "." works as well as "/" between levels.
    */
   incomingMailboxes: string[];
@@ -71,6 +71,12 @@ export interface Config {
   incomingThreshold: number;
   /** At most one incoming report per this many minutes, and only when something was found. */
   incomingReportMinutes: number;
+  /** Move flagged incoming mail here (needs FASTMAIL_WRITE_TOKEN). Empty = report only. */
+  quarantineMailbox: string;
+  /** Model finds are moved only at or above this P(spam); facts always are. */
+  quarantineThreshold: number;
+  /** Most messages quarantined per day (UTC). */
+  maxQuarantinePerDay: number;
 
   correspondentMax: number;
   sendWhenEmpty: boolean;
@@ -208,6 +214,9 @@ export function loadConfig(env: Env): Config {
     incomingSkipRead: bool(env.INCOMING_SKIP_READ),
     incomingThreshold: clamp(num(env.INCOMING_THRESHOLD, 0.7), 0.5, 1),
     incomingReportMinutes: clamp(Math.floor(num(env.INCOMING_REPORT_MINUTES, 60)), 15, 10_080),
+    quarantineMailbox: str(env.QUARANTINE_MAILBOX),
+    quarantineThreshold: clamp(num(env.QUARANTINE_THRESHOLD, 0.9), 0.5, 1),
+    maxQuarantinePerDay: clamp(Math.floor(num(env.MAX_QUARANTINE_PER_DAY, 20)), 0, 1000),
 
     correspondentMax: clamp(Math.floor(num(env.CORRESPONDENT_MAX, 5000)), 100, 100_000),
     sendWhenEmpty: bool(env.SEND_WHEN_EMPTY, true),

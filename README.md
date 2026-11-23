@@ -1,16 +1,23 @@
 # fastspam
 
-A weekly digest of the mail in your Fastmail Spam folder that shouldn't be there.
+Fastmail's spam filter is good, but it gets things wrong both ways. fastspam is a Cloudflare
+Worker that checks both, every 15 minutes:
 
-Fastmail's spam filter is good, but now and then a receipt, a reply from someone new, or a
-sign-in code lands in Spam, and Spam is deleted automatically after 30 days (Fastmail's
-default; you can change it in Fastmail's settings). fastspam runs on a Cloudflare Worker. Every
-15 minutes it reads the sender and subject of what has arrived in Spam and works out which
-messages look misfiled; once a week it sends you a short digest of them.
+- **Real mail in Spam.** Now and then a receipt, a reply from someone new, or a sign-in code
+  lands in Spam, and Spam is deleted automatically after 30 days (Fastmail's default; you can
+  change it). fastspam works out which messages in Spam look misfiled and sends you a short
+  weekly digest of them.
+- **Spam that got through.** Optionally, it checks new mail in the folders you choose for spam,
+  scams and phishing the filter missed, and emails you a short report, at most hourly, when it
+  finds any. See [Checking incoming mail](#checking-incoming-mail).
+
+Rules settle most messages; a decision model is asked only about the rest. It costs very little
+to run: see [What it costs](#what-it-costs).
 
 **By default it never changes your mail.** It scans with a Fastmail token that has
 *Read-only access*, so Fastmail itself stops it from changing anything. If you want, it can
-also move the clearest cases out of Spam (see [Rescuing](#rescuing-optional)).
+move the clearest cases out of Spam (see [Rescuing](#rescuing-optional)), or move spam that got
+through into a quarantine folder (see [Quarantine](#quarantine-optional)).
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Bandit/fastspam)
 
@@ -19,11 +26,13 @@ then see [Deploy with the button](#deploy-with-the-button).
 
 - [How decisions are made](#how-decisions-are-made)
 - [Choosing a model](#choosing-a-model)
+- [What it costs](#what-it-costs)
 - [Setup](#setup)
 - [First run: preview](#first-run-preview)
 - [Configuration](#configuration)
 - [Rules](#rules)
 - [Rescuing (optional)](#rescuing-optional)
+- [Checking incoming mail](#checking-incoming-mail)
 - [Evaluation](#evaluation)
 - [Limits](#limits)
 - [Privacy: what goes where](#privacy-what-goes-where)
@@ -188,6 +197,49 @@ AI_GATEWAY_ID=your-gateway
 were close to Gemini's on important mail, but asked about one message at a time it caught only
 about 60%, which means batching makes it more lenient rather than more accurate.
 
+## What it costs
+
+Very little. On the author's account, the first pass through a full Spam folder (about 1,000
+messages, from 90 days' retention) cost about **5 cents** of Gemini Decision, and since then
+fastspam costs a few cents a month. The Workers plan matters more than the model.
+
+**Cloudflare Workers.** fastspam runs 96 times a day and makes a handful of requests each time.
+
+- **Workers Free ($0)** covers the requests, KV reads and KV writes (at most about 200 of the
+  1,000 a day allowed) with room to spare. The catch is the 10 ms CPU limit per run: fastspam
+  is built to fit it, but the margin is thin (see [Limits](#limits)).
+- **Workers Paid ($5 a month)** covers everything fastspam uses many times over, and removes
+  the CPU worry. If you already pay for it, fastspam adds nothing.
+- AI Gateway is free.
+
+**The model.** You pay per input token; output is free. Gemini reported about 400 tokens per
+message plus about 430 per call (the instructions). Each 15-minute run makes at most one call
+for Spam and one for incoming mail, so at low volumes most calls carry one or two messages, and
+each costs a little more. Rough monthly figures, assuming one incoming message in five
+reaches the model (it was one in ten on the author's mail):
+
+| | Light | Typical | Heavy |
+|---|---|---|---|
+| New spam a day | 10 | 50 | 300 |
+| New mail a day in `INCOMING_MAILBOXES` | 40 | 150 | 600 |
+| Messages to the model a day | about 18 | about 80 | about 420 |
+| Input tokens a month | about 0.45M | about 1.8M | about 7M |
+| Gemini Decision or OpenAI ($0.10/M) | about $0.05 | about $0.18 | about $0.70 |
+| Clef through AI Gateway ($0.24/M) | about $0.11 | about $0.43 | about $1.70 |
+| Clef without AI Gateway | free | free | free |
+
+- **Clef without a gateway** runs on Workers AI's free 10,000 neurons a day, about 458,000 Clef
+  tokens. Even the heavy column uses about half of that, though Clef counts tokens a little
+  differently, so treat the margin as rough. If the allocation runs out, model calls fail
+  (free of charge) until it resets at 00:00 UTC, and fastspam carries on from where it stopped.
+- **Clef through a gateway with Unified Billing is paid** from your credits at Clef's own price,
+  instead of the free allocation. To keep Clef free, leave `AI_GATEWAY_ID` empty (see
+  [AI Gateway](#3-ai-gateway-optional-needed-for-the-google-and-openai-models)).
+- **The first pass** through an existing Spam folder is a one-off on top: about 450 tokens a
+  message, so 1,000 messages is about 0.45M tokens, or about 5 cents with Gemini.
+- Turning off the incoming check, or `INCOMING_SKIP_READ=true`, sends fewer messages to the
+  model. So does `PREVIEW_CHARS=0`, at some cost in accuracy.
+
 ## Setup
 
 You need a Fastmail account on a plan that includes API tokens (not Basic) and a Cloudflare
@@ -246,8 +298,9 @@ Set `NOTIFIER` in `wrangler.jsonc` to one of these:
 - **`fastmail`** (default). The digest is created directly in your Inbox over JMAP. Nothing is
   sent by email, so there is no sending domain or deliverability to set up. This needs a
   **second** token: protocol **JMAP**, **Read-only access** off, and the **Email** scope only.
-  It is used for nothing else. It doesn't need **Email submission**, which is for sending mail
-  as you; fastspam never sends mail, it only creates the digest in your Inbox:
+  It is used for this and, if you turn them on, [rescuing](#rescuing-optional) and
+  [quarantine](#quarantine-optional). It doesn't need **Email submission**, which is for sending
+  mail as you; fastspam never sends mail, it only creates the digest in your Inbox:
   ```bash
   npx wrangler secret put FASTMAIL_WRITE_TOKEN
   ```
@@ -327,7 +380,7 @@ One cron runs every 15 minutes (`*/15 * * * *` in `wrangler.jsonc`). Each run do
   so something lasting (a revoked token, a model that keeps refusing a message) doesn't wait for
   the weekly digest. A one-off, which the next run usually retries successfully, doesn't alert.
   While the problem lasts, the alert repeats at most daily.
-- **If the [incoming check](#incoming-check-experimental) found something**, and the last
+- **If the [incoming check](#checking-incoming-mail) found something**, and the last
   incoming report was at least `INCOMING_REPORT_MINUTES` ago, it sends the incoming report.
 - **Otherwise it does one small slice of work**, sized to fit the Workers Free CPU limit:
   1. **Indexing Sent, newest first, `SENT_PAGE` (200) messages per run**, until all of it is
@@ -421,10 +474,13 @@ These go in `vars` in `wrangler.jsonc`.
 | `RESCUE_MAILBOX` | empty | see [Rescuing](#rescuing-optional) |
 | `RESCUE_BASIS` | `deterministic` | `deterministic` or `all` |
 | `MAX_RESCUES_PER_DIGEST` | `20` | most messages moved between two digests |
-| `INCOMING_MAILBOXES` | empty | folders to check for spam that got through; see [Incoming check](#incoming-check-experimental) |
+| `INCOMING_MAILBOXES` | empty | folders to check for spam that got through; see [Checking incoming mail](#checking-incoming-mail) |
 | `INCOMING_SKIP_READ` | `false` | don't check messages already marked read |
 | `INCOMING_THRESHOLD` | `0.7` | minimum P(spam) for the model to flag an incoming message |
 | `INCOMING_REPORT_MINUTES` | `60` | at most one incoming report per this many minutes |
+| `QUARANTINE_MAILBOX` | empty | move flagged incoming mail here; see [Quarantine](#quarantine-optional) |
+| `QUARANTINE_THRESHOLD` | `0.9` | minimum P(spam) for a model verdict to move mail; facts always do |
+| `MAX_QUARANTINE_PER_DAY` | `20` | most messages quarantined per day (UTC) |
 | `CORRESPONDENT_MAX` | `5000` | addresses kept in the index (most recent first) |
 | `SEND_WHEN_EMPTY` | `true` | send an "all clear" digest when there is nothing to report |
 | `SUBREQUEST_BUDGET` | `45` | subrequests per run; raise on Workers Paid |
@@ -458,7 +514,8 @@ and set `FASTMAIL_WRITE_TOKEN`. fastspam will then move suspects out of Spam int
 mailbox as each slice is reviewed, so they survive Spam's automatic deletion even if you don't
 read the digest in time.
 
-This is the only change fastspam ever makes to mail, and it is deliberately narrow:
+This is one of only two changes fastspam can make to mail (the other is
+[quarantine](#quarantine-optional)), and it is deliberately narrow:
 
 - The destination is the single mailbox you configured, looked up when the run starts. A model
   never chooses it.
@@ -474,11 +531,11 @@ By default (`RESCUE_BASIS=deterministic`), **only messages reported on a fact** 
 `ALWAYS_REPORT`, someone you started a conversation with, or an existing conversation. Model judgements still
 appear in the digest, but they never move mail unless you set `RESCUE_BASIS=all`.
 
-## Incoming check (experimental)
+## Checking incoming mail
 
-The Spam review in reverse: look at mail that *reached* your folders for spam, scams and phishing
-the filter missed, and email you a short report, at most hourly, when it finds any. Set
-`INCOMING_MAILBOXES` to turn it on:
+The Spam review in reverse: look at new mail that *reached* your folders for spam, scams and
+phishing the filter missed, and email you a short report, at most every
+`INCOMING_REPORT_MINUTES` (60), when it finds any. It's off until you name the folders:
 
 ```
 INCOMING_MAILBOXES=Inbox, Lists/Newsletters
@@ -487,28 +544,66 @@ INCOMING_SKIP_READ=true
 
 Folders are names or paths, with `/` or `.` between levels. Spam can't be one of them.
 
-- **Read-only.** It never moves, flags or changes mail. The report is a list for you to judge.
 - **Facts first, as in Spam.** These settle a message without a model: you started a
   conversation with the sender; DMARC proves it came from an organisation's domain you've
   written to (never a webmail domain); it's in a conversation you wrote in; `ALWAYS_REPORT`;
   your own addresses. Mail that fails DMARC from a domain whose policy says to quarantine or
   reject it is flagged on that fact alone, as is a `NEVER_REPORT` sender. Only what's left
-  goes to the model, told that the messages came from the inbox.
+  goes to the model, told that the messages came from the inbox. On the author's mail, about
+  one message in ten reached the model.
 - **Flagged when the model is confident.** P(spam) at or above `INCOMING_THRESHOLD` (0.7).
   Most incoming mail is legitimate, so the bar is higher than for the Spam review.
-- **Only new mail.** It starts with mail arriving after you turn it on, a few minutes behind
-  (the same settling delay as the Spam review).
+- **New mail only.** It starts with mail arriving after you turn it on, and checks each message
+  once, a few minutes after it arrives (the same settling delay as the Spam review).
 - **`INCOMING_SKIP_READ=true`** leaves out mail you've already read, on the basis that if you
   read it and didn't mark it as spam, you've judged it. A find you read, move or delete before
   the report goes out is left out of the report too.
-- fastspam's own digests and reports are recognised and skipped.
-- Each week's numbers (messages checked, messages flagged) appear in the weekly digest.
+- **Report only, unless you turn on [quarantine](#quarantine-optional).**
+- fastspam's own digests, reports and alerts are recognised and skipped. Each week's numbers
+  (messages checked, flagged and quarantined) appear in the weekly digest.
 
 On the author's mail, using `google/gemini-decision-1` at 0.7: of 58 messages that had got past
 the filter and were later moved to Spam by hand, 54 were flagged. None of 58 legitimate
 messages from cold senders were. The ones missed were launch announcements and a loan offer:
-unwanted rather than dangerous. A small sample; judge it on your own mail first with
-`node scripts/scan-incoming.mjs`, which runs the same check locally and changes nothing.
+unwanted rather than dangerous. That's a small sample, so try it on your own mail first:
+`node scripts/scan-incoming.mjs` runs the same check locally over the last `--days` (14) and
+changes nothing, and `--set missed` measures the catch rate on spam you moved to Spam yourself.
+
+### Quarantine (optional)
+
+Set `QUARANTINE_MAILBOX` to a folder (create it in Fastmail first, for example `Quarantine`) and
+set `FASTMAIL_WRITE_TOKEN`, and the clearest finds are moved there as they're found. Everything
+the check flags is still listed in the report, moved or not, with a link, so a false positive is
+easy to spot and move back.
+
+What moves, and the limits:
+
+- **Facts always**: a DMARC failure from a domain that says to quarantine or reject such mail,
+  or a `NEVER_REPORT` sender.
+- **Model verdicts at `QUARANTINE_THRESHOLD` (0.9) or above.** This is stricter than
+  `INCOMING_THRESHOLD` on purpose: moving mail out of sight should take more certainty than
+  mentioning it. Unlike [rescuing](#rescuing-optional), quarantine acts on a model's judgement
+  by default, because almost all spam that gets through is only recognisable that way. If you'd
+  rather it moved only on facts, set `QUARANTINE_THRESHOLD=1`.
+- **At most `MAX_QUARANTINE_PER_DAY` (20)** messages a day. The rest stay where they are and the
+  report says why.
+- The destination is the one folder you configured; a model never chooses it, and it can't be
+  one of `INCOMING_MAILBOXES`.
+- Each message is checked again first and skipped unless it's still in one of the checked
+  folders. Only that membership changes: it's removed from the checked folder and added to
+  the quarantine folder. Other folders and its flags are left alone. Nothing is deleted.
+- `DRY_RUN=true` never moves anything.
+
+Pick a dedicated folder rather than Spam: Spam is deleted automatically, and fastspam's Spam
+review would then look at the same messages again.
+
+**Training Fastmail's filter.** Each Fastmail folder has a setting, off by default, to "Scan this
+folder daily and learn any new messages" as spam or as not spam. Turned on for the quarantine
+folder ("as spam"), Fastmail's own filter learns from what fastspam catches, so it may stop
+similar mail sooner. The catch is that it also learns from fastspam's mistakes: a legitimate
+message left in quarantine until the daily scan is learned as spam. Leave it off until you
+trust what lands there, or check the folder each day. The same setting on your
+[rescue](#rescuing-optional) folder ("as not spam") teaches the filter about mail it misfiled.
 
 ## Evaluation
 
@@ -669,7 +764,7 @@ any of them is reliable.
 - **In the digest**: the subject, sender and fastspam's reason for each reported message.
 - **Never**: message bodies beyond the preview, attachments, or anything from outside Spam
   except your Sent recipients, and which conversations have messages outside Spam. The
-  exception is the [incoming check](#incoming-check-experimental), off by default: with it on,
+  exception is [checking incoming mail](#checking-incoming-mail), off by default: with it on,
   the same fields for messages in `INCOMING_MAILBOXES` that no rule settled go to the model,
   and the report lists the sender, subject and reason for each find.
 

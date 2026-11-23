@@ -1,6 +1,6 @@
 # Copy to .dev.vars for `wrangler dev` and the scripts. Never commit .dev.vars.
 FASTMAIL_TOKEN=
-# Only for NOTIFIER=fastmail or RESCUE_MAILBOX:
+# Only for NOTIFIER=fastmail, RESCUE_MAILBOX or QUARANTINE_MAILBOX:
 FASTMAIL_WRITE_TOKEN=
 POSTMARK_SERVER_TOKEN=
 EMAIL_FROM=fastspam@your-domain.example
@@ -15,9 +15,11 @@ EMAIL_TO=you@example.com
 # Uncomment for local runs. Commented out so the Deploy to Cloudflare button
 # doesn't create a DRY_RUN secret that clashes with the DRY_RUN var.
 # DRY_RUN=true
-# Experimental: check these folders for spam, scams and phishing that the
-# filter let through ("/" or "." between levels). Read-only. `npm run deploy`
-# applies these like the settings above; scripts/scan-incoming.mjs uses them too.
+# Check these folders for spam, scams and phishing that the filter let through
+# ("/" or "." between levels). `npm run deploy` applies these like the settings
+# above; scripts/scan-incoming.mjs uses them too.
 # INCOMING_MAILBOXES=Inbox, Lists/Newsletters
 # Leave out messages already marked read (you've judged those yourself):
 # INCOMING_SKIP_READ=true
+# Move the clearest finds here (needs FASTMAIL_WRITE_TOKEN):
+# QUARANTINE_MAILBOX=Quarantine

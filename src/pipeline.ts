@@ -12,6 +12,7 @@ import { renderIncomingReport } from "./lib/incoming-report.ts";
 import { renderAlert } from "./lib/alert.ts";
 import { applySent, emptyIndex, lookup, SENT_PROPERTIES, type SentRow } from "./jmap/correspondents.ts";
 import { rescue } from "./jmap/rescue.ts";
+import { quarantine } from "./jmap/quarantine.ts";
 import { decide } from "./decide.ts";
 import { classify, type ClassifyResult } from "./ai/classify.ts";
 import { isReported, type Item } from "./ai/classifier.ts";
@@ -116,7 +117,7 @@ export interface WorkReport {
   /** FASTMAIL_LINK_TEMPLATE applied to a reviewed message, so the preview can check it opens. */
   sampleLink?: string;
   /** The incoming check, when INCOMING_MAILBOXES is set and it ran. */
-  incoming?: { checked: number; settledByFact: number; sentToModel: number; modelCalls: number; flagged: number };
+  incoming?: { checked: number; settledByFact: number; sentToModel: number; modelCalls: number; flagged: number; quarantined: number };
 }
 
 export interface DigestReport {
@@ -706,7 +707,9 @@ async function sendDigest(ctx: Context, job: JobState, now: Date): Promise<Diges
     backlog,
     indexing: job.sent.historyComplete ? undefined : { indexed: job.sent.historyIndexed, total: job.sent.historyTotal ?? null },
     leftSpam,
-    ...(config.incomingMailboxes.length && job.incoming ? { incoming: { checked: job.incoming.week.checked, flagged: job.incoming.week.flagged } } : {}),
+    ...(config.incomingMailboxes.length && job.incoming
+      ? { incoming: { checked: job.incoming.week.checked, flagged: job.incoming.week.flagged, quarantined: job.incoming.week.quarantined ?? 0 } }
+      : {}),
   };
   const linker = makeLinker(config.linkTemplate, { accountId: session.accountId, mailboxId: junk.id, mailboxName: junk.name });
   const message = renderDigest({
@@ -917,7 +920,9 @@ async function checkIncoming(
     s.modelCalls += calls;
     s.flagged += flagged.length;
   }
-  report.incoming = { checked: checked.length, settledByFact: settledHere, sentToModel, modelCalls: calls, flagged: flagged.length };
+  const quarantined = await quarantineFinds(ctx, inc, b, folders, flagged, now, report);
+  for (const s of [inc.stats, inc.week]) s.quarantined = (s.quarantined ?? 0) + quarantined;
+  report.incoming = { checked: checked.length, settledByFact: settledHere, sentToModel, modelCalls: calls, flagged: flagged.length, quarantined };
 
   const pendingIds = new Set(inc.pending.map((p) => p.candidate.id));
   for (const f of flagged) {
@@ -932,6 +937,53 @@ async function checkIncoming(
   inc.cursor = moved.cursor ?? inc.cursor;
   inc.edge = moved.edge;
   return true;
+}
+
+/**
+ * With QUARANTINE_MAILBOX set, move the clearest finds out of the checked
+ * folders: facts always, model verdicts at QUARANTINE_THRESHOLD or above, at
+ * most MAX_QUARANTINE_PER_DAY. Marks each find moved or not. Returns how many
+ * were moved. A failure is recorded; the finds are still reported.
+ */
+async function quarantineFinds(
+  ctx: Context,
+  inc: IncomingState,
+  b: Boxes,
+  folders: Mailbox[],
+  finds: IncomingFind[],
+  now: Date,
+  report: WorkReport,
+): Promise<number> {
+  const { config, env, budget } = ctx;
+  if (!config.quarantineMailbox || ctx.opts.readOnly || config.dryRun) return 0;
+  const eligible = finds.filter((f) => f.basis !== "model" || (f.pSpam ?? 0) >= config.quarantineThreshold);
+  if (!eligible.length) return 0;
+  try {
+    const box = findMailbox(b.mailboxes, config.quarantineMailbox, "QUARANTINE_MAILBOX");
+    const today = now.toISOString().slice(0, 10);
+    if (inc.quarantine?.day !== today) inc.quarantine = { day: today, count: 0 };
+    const writer = writeClient(env, config, ctx.opts, budget);
+    if ((await writer.session()).accountId !== b.session.accountId) {
+      throw new Error("FASTMAIL_WRITE_TOKEN belongs to a different account than FASTMAIL_TOKEN");
+    }
+    const result = await quarantine(writer, eligible.map((f) => f.candidate.id), {
+      fromIds: folders.map((m) => m.id),
+      quarantineId: box.id,
+      max: Math.max(0, config.maxQuarantinePerDay - inc.quarantine.count),
+    });
+    const moved = new Set(result.moved);
+    const skipped = new Map(result.skipped.map((s) => [s.id, s.reason]));
+    for (const f of eligible) {
+      if (moved.has(f.candidate.id)) f.movedTo = box.id;
+      else if (skipped.has(f.candidate.id)) f.notMoved = skipped.get(f.candidate.id);
+    }
+    inc.quarantine.count += moved.size;
+    return moved.size;
+  } catch (err) {
+    report.failures.push(`quarantine failed: ${errorMessage(err)}`);
+    for (const f of eligible) f.notMoved = "quarantine failed";
+    return 0;
+  }
 }
 
 function incomingFind(c: Candidate, mailboxId: string, basis: IncomingFind["basis"], detail: string): IncomingFind {
@@ -966,7 +1018,9 @@ async function sendIncomingReport(ctx: Context, job: JobState, now: Date): Promi
   const live = new Map(current.map((e) => [e.id, e]));
   const finds = inc.pending.filter((p) => {
     const e = live.get(p.candidate.id);
-    if (!e || !Object.keys(e.mailboxIds ?? {}).some((id) => folderIds.has(id))) return false;
+    const boxes = Object.keys(e?.mailboxIds ?? {});
+    // Quarantined finds are listed while they're still in quarantine.
+    if (!e || !(p.movedTo ? boxes.includes(p.movedTo) : boxes.some((id) => folderIds.has(id)))) return false;
     return !(config.incomingSkipRead && e.keywords?.$seen);
   });
   const dealtWith = inc.pending.length - finds.length;
@@ -986,8 +1040,9 @@ async function sendIncomingReport(ctx: Context, job: JobState, now: Date): Promi
       folderName: path,
       dealtWith,
       link: (f) => {
-        const m = b.mailboxes.find((x) => x.id === f.mailboxId);
-        return makeLinker(config.linkTemplate, { accountId: b.session.accountId, mailboxId: f.mailboxId, mailboxName: m?.name ?? "" })(f.candidate);
+        const where = f.movedTo ?? f.mailboxId;
+        const m = b.mailboxes.find((x) => x.id === where);
+        return makeLinker(config.linkTemplate, { accountId: b.session.accountId, mailboxId: where, mailboxName: m?.name ?? "" })(f.candidate);
       },
     });
   }
@@ -1064,7 +1119,7 @@ async function sendAlert(ctx: Context, job: JobState, now: Date): Promise<AlertR
 function writeClient(env: Env, config: Config, opts: RunOptions, budget: Budget): JmapClient {
   const token = env.FASTMAIL_WRITE_TOKEN;
   if (typeof token !== "string" || !token || token === "unused") {
-    throw new Error("FASTMAIL_WRITE_TOKEN (Email scope) is required for NOTIFIER=fastmail and RESCUE_MAILBOX");
+    throw new Error("FASTMAIL_WRITE_TOKEN (Email scope) is required for NOTIFIER=fastmail, RESCUE_MAILBOX and QUARANTINE_MAILBOX");
   }
   return new JmapClient({ sessionUrl: config.jmapSessionUrl, token, fetchImpl: opts.fetchImpl, budget });
 }

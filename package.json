@@ -2,7 +2,7 @@
   "name": "fastspam",
   "version": "0.1.0",
   "private": true,
-  "description": "Weekly review of your Fastmail spam folder for mail that looks legitimate, on Cloudflare Workers",
+  "description": "Finds real mail in your Fastmail Spam folder, and spam that got past it, on Cloudflare Workers",
   "type": "module",
   "engines": {
     "node": ">=22.18"
@@ -28,7 +28,7 @@
         "description": "Fastmail API token for scanning (Settings → Privacy & Security → Manage API tokens → New API token): protocol JMAP, **Read-only access** on, **Email** scope only. It cannot change mail."
       },
       "FASTMAIL_WRITE_TOKEN": {
-        "description": "Optional. A second Fastmail token (JMAP, Read-only access **off**, **Email** scope only; not Email submission), needed only for `NOTIFIER=fastmail` (the digest is created in your Inbox) or `RESCUE_MAILBOX`. Enter `unused` otherwise."
+        "description": "Optional. A second Fastmail token (JMAP, Read-only access **off**, **Email** scope only; not Email submission), needed only for `NOTIFIER=fastmail` (the digest is created in your Inbox), `RESCUE_MAILBOX` or `QUARANTINE_MAILBOX`. Enter `unused` otherwise."
       },
       "POSTMARK_SERVER_TOKEN": {
         "description": "Postmark Server API token, used when `NOTIFIER` is `postmark`. Enter `unused` otherwise."
