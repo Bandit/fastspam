@@ -22,7 +22,7 @@ const MAX_LISTED = 50;
  * The incoming report: plain text, like the digest, saying why each message
  * was flagged. Quarantined messages come first, so a false positive is easy to
  * spot and move back. Message text is sanitised again here. Facts (DMARC,
- * your own blocklist) come before model judgements; the model's most certain
+ * SPAM_SENDERS, senders you moved to Spam) come before model judgements; the model's most certain
  * first.
  */
 export function renderIncomingReport(input: IncomingReportInput): Message {

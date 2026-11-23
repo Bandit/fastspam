@@ -68,7 +68,7 @@ try {
     console.log(`\nComparing batching on ${items.length} message(s)…`);
     const batched = await classify(env.AI, items, { ...opts, batchSize: config.batchSize });
     const single = await classify(env.AI, items, { ...opts, batchSize: 1 });
-    const d = disagreement(batched.verdicts, single.verdicts, config.confidenceThreshold);
+    const d = disagreement(batched.verdicts, single.verdicts, config.spamReviewThreshold);
     console.log(`BATCH_SIZE=${config.batchSize} vs 1: ${d.compared} compared · report decision flips on ${(d.reportFlips * 100).toFixed(1)}% · top answer differs on ${(d.topDiffers * 100).toFixed(1)}% · mean |ΔP(not spam)| ${d.meanAbsDelta.toFixed(3)}`);
     console.log("If report decisions flip on more than a few percent, set BATCH_SIZE lower (1 is always safe).");
   }

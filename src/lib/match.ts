@@ -1,7 +1,7 @@
 import { domainOf } from "./sanitise.ts";
 
 /**
- * Sender patterns for ALWAYS_REPORT / NEVER_REPORT, matched case-insensitively:
+ * Sender patterns for TRUSTED_SENDERS / SPAM_SENDERS, matched case-insensitively:
  *
  *   alice@example.com     exactly that address
  *   example.com           that domain and its subdomains (also "@example.com")

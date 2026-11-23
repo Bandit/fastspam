@@ -116,6 +116,6 @@ export function lookup(index: CorrespondentIndex | undefined): CorrespondentLook
     startedDomain: (a) => !self.has(a) && startedDomains.has(domainOf(a)),
     isSelf: (a) => self.has(a),
     self,
-    movedToSpam: (a) => !self.has(a) && !!usable?.spamSenders?.[a],
+    movedToSpam: (a) => !self.has(a) && !!usable?.movedToSpam?.[a],
   };
 }

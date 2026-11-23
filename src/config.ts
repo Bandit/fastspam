@@ -49,8 +49,8 @@ export interface Config {
   /** Authentication-Results from these authserv-ids (and subdomains) are trusted. */
   trustedAuthservIds: string[];
 
-  alwaysReport: string[];
-  neverReport: string[];
+  trustedSenders: string[];
+  spamSenders: string[];
 
   aiModel: string;
   aiGatewayId: string;
@@ -58,8 +58,8 @@ export interface Config {
   maxModelCallsPerRun: number;
   /** Override of the model's context window used by the batch token guard. */
   modelContextTokens: number | null;
-  confidenceThreshold: number;
-  /** CONFIDENCE_THRESHOLD, with per-tier overrides from TIER_THRESHOLDS. */
+  spamReviewThreshold: number;
+  /** SPAM_REVIEW_THRESHOLD, with per-tier overrides from TIER_THRESHOLDS. */
   thresholds: Thresholds;
   /** Tiers that appear in the digest. */
   reportTiers: Tier[];
@@ -172,7 +172,7 @@ export function tierThresholds(v: unknown, fallback: number): Thresholds {
 }
 
 export function loadConfig(env: Env): Config {
-  const confidenceThreshold = clamp(num(env.CONFIDENCE_THRESHOLD, 0.6), 0, 1);
+  const spamReviewThreshold = clamp(num(env.SPAM_REVIEW_THRESHOLD, 0.6), 0, 1);
   const tiers = list(env.REPORT_TIERS).filter((t): t is Tier => (TIERS as readonly string[]).includes(t));
   const notifier = str(env.NOTIFIER, "fastmail");
   return {
@@ -206,16 +206,16 @@ export function loadConfig(env: Env): Config {
     spamSkipRead: bool(env.SPAM_SKIP_READ),
     trustedAuthservIds: env.TRUSTED_AUTHSERV_IDS === undefined ? DEFAULT_TRUSTED_AUTHSERV_IDS : list(env.TRUSTED_AUTHSERV_IDS),
 
-    alwaysReport: list(env.ALWAYS_REPORT),
-    neverReport: list(env.NEVER_REPORT),
+    trustedSenders: list(env.TRUSTED_SENDERS),
+    spamSenders: list(env.SPAM_SENDERS),
 
     aiModel: str(env.AI_MODEL, DEFAULT_MODEL),
     aiGatewayId: str(env.AI_GATEWAY_ID),
     batchSize: clamp(Math.floor(num(env.BATCH_SIZE, 16)), 1, 1000),
     maxModelCallsPerRun: clamp(Math.floor(num(env.MAX_MODEL_CALLS_PER_RUN, 16)), 0, 1000),
     modelContextTokens: optionalNum(env.MODEL_CONTEXT_TOKENS),
-    confidenceThreshold,
-    thresholds: tierThresholds(env.TIER_THRESHOLDS, confidenceThreshold),
+    spamReviewThreshold,
+    thresholds: tierThresholds(env.TIER_THRESHOLDS, spamReviewThreshold),
     reportTiers: tiers.length ? tiers : [...TIERS],
     questionStyle: str(env.QUESTION_STYLE) === "yesno" ? "yesno" : "categories",
     honourDmarcPolicy: bool(env.HONOUR_DMARC_POLICY, true),

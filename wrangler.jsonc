@@ -49,7 +49,7 @@
     "QUESTION_STYLE": "categories",
     "AI_GATEWAY_ID": "",
     // Report a model verdict when P(not spam) is at least this.
-    "CONFIDENCE_THRESHOLD": "0.6",
+    "SPAM_REVIEW_THRESHOLD": "0.6",
     // Drop mail that fails DMARC when the sender's domain says p=quarantine/reject.
     "HONOUR_DMARC_POLICY": "true",
     "BATCH_SIZE": "16",
@@ -66,8 +66,8 @@
     // How far back the first pass through Spam starts. Empty = all of it.
     "BACKLOG_DAYS": "",
     // Sender patterns: address, domain, or *@domain (README "Rules").
-    "ALWAYS_REPORT": "",
-    "NEVER_REPORT": "",
+    "TRUSTED_SENDERS": "",
+    "SPAM_SENDERS": "",
     // Leave empty until the preview shows what scores your spam carries.
     "SPAM_SCORE_SKIP_ABOVE": "",
     // The score at which Fastmail moves mail to Spam (Standard 5, Aggressive

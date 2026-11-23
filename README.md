@@ -49,12 +49,12 @@ Each message in Spam goes down this ladder. The first rule that matches decides 
 
 | # | Condition | Result | Shown as |
 |---|---|---|---|
-| 1 | Sender matches `NEVER_REPORT` | dropped | — |
+| 1 | Sender matches `SPAM_SENDERS` | dropped | — |
 | 2 | Fails DMARC, and the sender's own domain publishes `p=quarantine` or `p=reject` | dropped | — |
 | 3 | Spam score below `SPAM_FILTER_THRESHOLD` (5): the filter didn't put it in Spam, so you did | dropped | — |
 | 4 | Spam score above `SPAM_SCORE_SKIP_ABOVE` (off by default) | dropped | — |
 | 5 | You've read it, with `SPAM_SKIP_READ` (off by default) | dropped | — |
-| 6 | Sender matches `ALWAYS_REPORT` | reported | fact, important |
+| 6 | Sender matches `TRUSTED_SENDERS` | reported | fact, important |
 | 7 | You have *started* a conversation with this exact address | reported | fact, important |
 | 8 | Message is in a conversation that has mail you *received and kept* | reported | fact, important |
 | 9 | You've moved mail from this exact address to Spam yourself before | dropped | — |
@@ -132,7 +132,7 @@ That means one extra line in a digest you read yourself. With the default rescue
 model's answer never moves mail.
 
 A message is reported when P(not spam), which is 1 minus the probability the model gave for
-`spam`, is at least the threshold for its tier (`CONFIDENCE_THRESHOLD`, 0.6 by default). The
+`spam`, is at least the threshold for its tier (`SPAM_REVIEW_THRESHOLD`, 0.6 by default). The
 top answer itself doesn't decide. A message scored 33% spam, 25% newsletter, 22% account and 20%
 transactional is 67% not spam, even though `spam` is the single largest answer. When the model
 is unsure, fastspam leans towards showing you: `unclear` counts as not spam, because a missed
@@ -181,7 +181,7 @@ fastspam and get a digest without entering card details.
 The Google and OpenAI models go through [AI Gateway](https://developers.cloudflare.com/ai-gateway/)
 and are paid from Unified Billing credits. You don't need your own Google or OpenAI key. At this
 volume the cost is a fraction of a cent a week. The reason to consider them is calibration:
-`CONFIDENCE_THRESHOLD` is a probability cut, and only Gemini says its probabilities are
+`SPAM_REVIEW_THRESHOLD` is a probability cut, and only Gemini says its probabilities are
 calibrated. The evaluation harness [checks that claim](#evaluation) against real data instead
 of taking it on trust.
 
@@ -466,7 +466,7 @@ These go in `vars` in `wrangler.jsonc`.
 | `TIMEZONE` | `UTC` | IANA timezone for dates in the digest |
 | `AI_MODEL` | `@cf/cloudflare/clef` | see [Choosing a model](#choosing-a-model) |
 | `AI_GATEWAY_ID` | empty | AI Gateway name; required for Google and OpenAI models |
-| `CONFIDENCE_THRESHOLD` | `0.6` | minimum P(not spam) for a model verdict to be reported, in every tier |
+| `SPAM_REVIEW_THRESHOLD` | `0.6` | minimum P(not spam) for a model verdict to be reported, in every tier |
 | `TIER_THRESHOLDS` | empty | per-tier overrides, for example `promotional:0.8` |
 | `REPORT_TIERS` | all three | which tiers appear in the digest: `important,general,promotional` |
 | `QUESTION_STYLE` | `categories` | `categories` (seven answers, gives tiers) or `yesno` |
@@ -482,7 +482,7 @@ These go in `vars` in `wrangler.jsonc`.
 | `SENT_PAGE` | `200` | Sent messages indexed per run |
 | `MAX_SLICES_PER_RUN` | `1` | slices of work per run; raise on Workers Paid to catch up faster |
 | `BACKLOG_DAYS` | empty | how far back the first pass through Spam starts; empty = all of it |
-| `ALWAYS_REPORT` / `NEVER_REPORT` | empty | sender patterns, see [Rules](#rules) |
+| `TRUSTED_SENDERS` / `SPAM_SENDERS` | empty | sender patterns, see [Rules](#rules) |
 | `SPAM_FILTER_THRESHOLD` | `5` | the score at which Fastmail moves mail to Spam; see [Fastmail's spam settings](#fastmails-spam-settings). `0` turns off rules 3 and 9 |
 | `LEARN_SPAM_SENDERS` | `true` | learn the senders of mail you moved to Spam (rule 9, and the incoming check) |
 | `SPAM_SKIP_READ` | `false` | never report Spam you've read and left there (rule 5) |
@@ -515,7 +515,14 @@ To change a setting for your own deployment without editing `wrangler.jsonc`, pu
 
 ## Rules
 
-`ALWAYS_REPORT` and `NEVER_REPORT` take comma-separated sender patterns. Matching ignores case:
+Two lists say what a sender is, wherever their mail lands:
+
+| | In Spam | In your other folders ([incoming check](#checking-incoming-mail)) |
+|---|---|---|
+| `TRUSTED_SENDERS`: real mail | always listed in the digest | never flagged |
+| `SPAM_SENDERS`: spam | never listed in the digest | always flagged, and [quarantined](#quarantine-optional) if that's on |
+
+Both take comma-separated sender patterns. Matching ignores case:
 
 | Pattern | Matches |
 |---|---|
@@ -523,8 +530,11 @@ To change a setting for your own deployment without editing `wrangler.jsonc`, pu
 | `shop.example`, `@shop.example` or `*@shop.example` | that domain and its subdomains |
 | `news-*@shop.example` | `*` matches any characters within the address |
 
-`NEVER_REPORT` is checked first. Use it to silence a sender who keeps turning up. Use
-`ALWAYS_REPORT` for senders you always want to see if they land in Spam.
+In Spam, `SPAM_SENDERS` is checked first. In the incoming check, `TRUSTED_SENDERS` is (unless
+DMARC shows the From is forged). Use `SPAM_SENDERS` for a sender who keeps turning up, and
+`TRUSTED_SENDERS` for one you always want to hear from. You rarely need `SPAM_SENDERS` for
+senders whose mail you've moved to Spam yourself: those are
+[learned](#how-decisions-are-made).
 
 ## Fastmail's spam settings
 
@@ -568,7 +578,7 @@ This is one of only two changes fastspam can make to mail (the other is
   is moved.
 
 By default (`RESCUE_BASIS=deterministic`), **only messages reported on a fact** are moved:
-`ALWAYS_REPORT`, someone you started a conversation with, or an existing conversation. Model judgements still
+`TRUSTED_SENDERS`, someone you started a conversation with, or an existing conversation. Model judgements still
 appear in the digest, but they never move mail unless you set `RESCUE_BASIS=all`.
 
 ## Checking incoming mail
@@ -586,11 +596,11 @@ Folders are names or paths, with `/` or `.` between levels. Spam can't be one of
 
 - **Facts first, as in Spam.** These settle a message without a model: you started a
   conversation with the sender; DMARC proves it came from an organisation's domain you've
-  written to (never a webmail domain); it's in a conversation you wrote in; `ALWAYS_REPORT`;
+  written to (never a webmail domain); it's in a conversation you wrote in; `TRUSTED_SENDERS`;
   your own addresses. These are flagged on a fact alone: mail that fails DMARC from a domain
   whose policy says to quarantine or reject it; a sender you've moved to Spam yourself before
   (learned as described in [How decisions are made](#how-decisions-are-made)), even in a
-  conversation you replied to; and a `NEVER_REPORT` sender. Only what's left
+  conversation you replied to; and a sender in `SPAM_SENDERS`. Only what's left
   goes to the model, told that the messages came from the inbox. On the author's mail, about
   one message in ten reached the model.
 - **Flagged when the model is confident.** P(spam) at or above `INCOMING_THRESHOLD` (0.7).
@@ -621,7 +631,7 @@ easy to spot and move back.
 What moves, and the limits:
 
 - **Facts always**: a DMARC failure from a domain that says to quarantine or reject such mail,
-  a sender you've moved to Spam yourself before, or a `NEVER_REPORT` sender.
+  a sender you've moved to Spam yourself before, or a sender in `SPAM_SENDERS`.
 - **Model verdicts at `QUARANTINE_THRESHOLD` (0.9) or above.** This is stricter than
   `INCOMING_THRESHOLD` on purpose: moving mail out of sight should take more certainty than
   mentioning it. Unlike [rescuing](#rescuing-optional), quarantine acts on a model's judgement
@@ -657,7 +667,7 @@ Missing a receipt or a message from a person is the failure fastspam exists to p
 missed promotion barely matters; reporting a spam message costs a glance. So the harness sweeps
 thresholds from 0.3 to 0.9 and reports, at each one, the share caught in each
 [tier](#tiers), the spam reported per 100 spam, and which tier that spam would have shown up in.
-That sweep is how `CONFIDENCE_THRESHOLD` and `TIER_THRESHOLDS` should be chosen. For each model
+That sweep is how `SPAM_REVIEW_THRESHOLD` and `TIER_THRESHOLDS` should be chosen. For each model
 it also reports:
 
 - **Calibration**: the predicted P(not spam) against how often messages were actually
@@ -843,11 +853,11 @@ account; `npm run preview` shows what yours does:
 - **Replying to spam you kept.** If you reply to a spammer and leave their message in your
   Inbox or Archive, rule 8 treats later replies *in that same thread* as a real conversation.
   Rule 8 can't tell that apart from replying to a genuine stranger. Delete or re-file the spam,
-  or add the sender to `NEVER_REPORT`, which is checked before every other rule.
+  or add the sender to `SPAM_SENDERS`, which is checked before every other rule.
 - **People you only ever reply to.** Someone who always writes first (an accountant, a
   tradesperson) is never a rule 7 fact, because you never start the conversation. Replies in
   an existing thread are still caught by rule 8. A *new* thread from them goes to the model,
-  which sees `replied_before`. Add them to `ALWAYS_REPORT` if that isn't enough.
+  which sees `replied_before`. Add them to `TRUSTED_SENDERS` if that isn't enough.
 - **Conversations can be faked.** A spammer who knows the Message-ID of an email in your Inbox
   (from a public mailing list, for example) can make their message thread with it, which
   triggers rule 8. The result is a line in the digest and, if rescuing is on, a move to

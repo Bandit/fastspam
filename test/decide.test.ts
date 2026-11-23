@@ -18,8 +18,8 @@ const cand = (over: Partial<Candidate> = {}): Candidate => ({
 });
 
 const ctx = (over: Partial<DecideContext> = {}): DecideContext => ({
-  neverReport: [],
-  alwaysReport: [],
+  spamSenders: [],
+  trustedSenders: [],
   spamScoreSkipAbove: null,
   honourDmarcPolicy: true,
   correspondents: lookup({
@@ -34,9 +34,9 @@ const ctx = (over: Partial<DecideContext> = {}): DecideContext => ({
 });
 
 describe("decision ladder", () => {
-  it("drops NEVER_REPORT senders first, even if they are correspondents", () => {
-    const d = decide(cand({ fromEmail: "friend@mail.example" }), ctx({ neverReport: ["mail.example"] }));
-    expect(d).toMatchObject({ outcome: "drop", reason: "never-report" });
+  it("drops SPAM_SENDERS senders first, even if they are correspondents", () => {
+    const d = decide(cand({ fromEmail: "friend@mail.example" }), ctx({ spamSenders: ["mail.example"] }));
+    expect(d).toMatchObject({ outcome: "drop", reason: "spam-sender" });
   });
   it("drops DMARC failures when the sender's domain publishes quarantine or reject", () => {
     expect(decide(cand({ auth: { dmarc: "fail", dmarcPolicy: "reject" } }), ctx())).toMatchObject({ outcome: "drop", reason: "dmarc-policy" });
@@ -54,8 +54,8 @@ describe("decision ladder", () => {
     expect(decide(cand({ spamScore: 12 }), ctx({ spamScoreSkipAbove: 10 }))).toMatchObject({ outcome: "drop", reason: "spam-score" });
     expect(decide(cand({ spamScore: 9 }), ctx({ spamScoreSkipAbove: 10 })).outcome).toBe("model");
   });
-  it("reports ALWAYS_REPORT senders on the allowlist basis", () => {
-    expect(decide(cand(), ctx({ alwaysReport: ["*@shop.example"] }))).toMatchObject({ outcome: "report", basis: "allowlist" });
+  it("reports TRUSTED_SENDERS on the trusted basis", () => {
+    expect(decide(cand(), ctx({ trustedSenders: ["*@shop.example"] }))).toMatchObject({ outcome: "report", basis: "trusted" });
   });
   it("does not treat an address you only ever replied to as a fact", () => {
     // People reply to spammers. Only starting a conversation counts.
@@ -77,7 +77,7 @@ describe("decision ladder", () => {
   });
   it("skips sender-based facts when DMARC fails", () => {
     expect(decide(cand({ fromEmail: "friend@mail.example", auth: { dmarc: "fail" } }), ctx()).outcome).toBe("model");
-    expect(decide(cand({ auth: { dmarc: "fail" } }), ctx({ alwaysReport: ["shop.example"] })).outcome).toBe("model");
+    expect(decide(cand({ auth: { dmarc: "fail" } }), ctx({ trustedSenders: ["shop.example"] })).outcome).toBe("model");
   });
   it("reports messages in a thread that has real mail", () => {
     expect(decide(cand(), ctx({ threadsWithRealMail: new Set(["T1"]) }))).toMatchObject({ outcome: "report", basis: "thread" });
@@ -93,7 +93,7 @@ describe("your own judgement", () => {
     addresses: { "friend@mail.example": 1 },
     started: { "friend@mail.example": 1 },
     self: ["owner@owner.example"],
-    spamSenders: { "pitch@cold.example": { seen: 1, received: 1 }, "friend@mail.example": { seen: 1, received: 1 } },
+    movedToSpam: { "pitch@cold.example": { seen: 1, received: 1 }, "friend@mail.example": { seen: 1, received: 1 } },
   });
 
   it("drops Spam scoring below the filter's threshold: you put it there", () => {
@@ -115,7 +115,7 @@ describe("your own judgement", () => {
     expect(decide(cand({ fromEmail: "pitch@cold.example" }), ctx({ correspondents: learned }))).toMatchObject({ outcome: "drop", reason: "your-spam-sender" });
     // You started a conversation with them: still reported.
     expect(decide(cand({ fromEmail: "friend@mail.example" }), ctx({ correspondents: learned })).outcome).toBe("report");
-    expect(decide(cand({ fromEmail: "pitch@cold.example" }), ctx({ correspondents: learned, alwaysReport: ["cold.example"] })).outcome).toBe("report");
+    expect(decide(cand({ fromEmail: "pitch@cold.example" }), ctx({ correspondents: learned, trustedSenders: ["cold.example"] })).outcome).toBe("report");
     // A forged From proves nothing about the sender.
     expect(decide(cand({ fromEmail: "pitch@cold.example", auth: { dmarc: "fail" } }), ctx({ correspondents: learned })).outcome).toBe("model");
   });

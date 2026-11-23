@@ -13,13 +13,13 @@ import type { CorrespondentLookup } from "./jmap/correspondents.ts";
 import { matchesAny } from "./lib/match.ts";
 
 export type IncomingDecision =
-  | { outcome: "skip"; reason: "self" | "allowlist" | "correspondent" | "known-domain" | "conversation"; detail: string }
-  | { outcome: "flag"; basis: "dmarc-policy" | "blocklist" | "your-spam-sender"; detail: string }
+  | { outcome: "skip"; reason: "self" | "trusted" | "correspondent" | "known-domain" | "conversation"; detail: string }
+  | { outcome: "flag"; basis: "dmarc-policy" | "spam-sender" | "your-spam-sender"; detail: string }
   | { outcome: "model" };
 
 export interface IncomingContext {
-  alwaysReport: readonly string[];
-  neverReport: readonly string[];
+  trustedSenders: readonly string[];
+  spamSenders: readonly string[];
   honourDmarcPolicy: boolean;
   correspondents: CorrespondentLookup;
   /** Threads with a message you sent. */
@@ -37,8 +37,8 @@ export function decideIncoming(c: Candidate, ctx: IncomingContext): IncomingDeci
   }
   if (from && !forged) {
     if (ctx.correspondents.isSelf(from)) return { outcome: "skip", reason: "self", detail: "from one of your own addresses" };
-    const always = matchesAny(from, ctx.alwaysReport);
-    if (always) return { outcome: "skip", reason: "allowlist", detail: `sender matches ALWAYS_REPORT "${always}"` };
+    const always = matchesAny(from, ctx.trustedSenders);
+    if (always) return { outcome: "skip", reason: "trusted", detail: `sender matches TRUSTED_SENDERS "${always}"` };
     if (ctx.correspondents.started(from) !== undefined) {
       return { outcome: "skip", reason: "correspondent", detail: "you have started conversations with this address" };
     }
@@ -58,8 +58,8 @@ export function decideIncoming(c: Candidate, ctx: IncomingContext): IncomingDeci
     return { outcome: "skip", reason: "conversation", detail: "part of a conversation you have written in" };
   }
   if (from) {
-    const never = matchesAny(from, ctx.neverReport);
-    if (never) return { outcome: "flag", basis: "blocklist", detail: `sender matches NEVER_REPORT "${never}"` };
+    const never = matchesAny(from, ctx.spamSenders);
+    if (never) return { outcome: "flag", basis: "spam-sender", detail: `sender matches SPAM_SENDERS "${never}"` };
   }
   return { outcome: "model" };
 }

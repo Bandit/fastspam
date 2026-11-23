@@ -3,7 +3,7 @@
  * model. Rungs 3–5 are facts about your own mail, so they cost nothing and an
  * adversarial subject line cannot argue with them.
  *
- *   1  sender matches NEVER_REPORT                   drop
+ *   1  sender matches SPAM_SENDERS                   drop
  *   2  fails DMARC, and the From domain publishes      drop
  *      p=quarantine or p=reject (HONOUR_DMARC_POLICY)
  *   2a spam score below SPAM_FILTER_THRESHOLD: the    drop
@@ -11,7 +11,7 @@
  *      rules) did
  *   2b spam score above SPAM_SCORE_SKIP_ABOVE         drop
  *   2c read, with SPAM_SKIP_READ                      drop
- *   3  sender matches ALWAYS_REPORT                   report  (allowlist)
+ *   3  sender matches TRUSTED_SENDERS                 report  (trusted)
  *   4  you started a conversation with this address   report  (correspondent)
  *   5  thread has mail you received and kept          report  (thread)
  *   5a you've moved mail from this sender to Spam     drop
@@ -31,13 +31,13 @@ import type { CorrespondentLookup } from "./jmap/correspondents.ts";
 import { matchesAny } from "./lib/match.ts";
 
 export type Decision =
-  | { outcome: "drop"; reason: "never-report" | "dmarc-policy" | "moved-by-you" | "spam-score" | "read" | "your-spam-sender"; detail: string }
+  | { outcome: "drop"; reason: "spam-sender" | "dmarc-policy" | "moved-by-you" | "spam-score" | "read" | "your-spam-sender"; detail: string }
   | { outcome: "report"; basis: Exclude<Basis, "model">; detail: string }
   | { outcome: "model" };
 
 export interface DecideContext {
-  neverReport: readonly string[];
-  alwaysReport: readonly string[];
+  spamSenders: readonly string[];
+  trustedSenders: readonly string[];
   spamScoreSkipAbove: number | null;
   /** 0 = off. */
   spamFilterThreshold?: number;
@@ -53,8 +53,8 @@ export function decide(c: Candidate, ctx: DecideContext): Decision {
   const from = c.fromEmail;
   const forged = c.auth.dmarc === "fail";
 
-  const never = from ? matchesAny(from, ctx.neverReport) : undefined;
-  if (never) return { outcome: "drop", reason: "never-report", detail: `matches NEVER_REPORT "${never}"` };
+  const never = from ? matchesAny(from, ctx.spamSenders) : undefined;
+  if (never) return { outcome: "drop", reason: "spam-sender", detail: `matches SPAM_SENDERS "${never}"` };
 
   // The domain owner's own published instruction: mail failing its checks is not genuine.
   if (ctx.honourDmarcPolicy && forged && (c.auth.dmarcPolicy === "quarantine" || c.auth.dmarcPolicy === "reject")) {
@@ -74,8 +74,8 @@ export function decide(c: Candidate, ctx: DecideContext): Decision {
   if (ctx.skipRead && c.seen) return { outcome: "drop", reason: "read", detail: "you've read it and left it in Spam" };
 
   if (from && !forged) {
-    const always = matchesAny(from, ctx.alwaysReport);
-    if (always) return { outcome: "report", basis: "allowlist", detail: `Sender matches ALWAYS_REPORT "${always}"` };
+    const always = matchesAny(from, ctx.trustedSenders);
+    if (always) return { outcome: "report", basis: "trusted", detail: `Sender matches TRUSTED_SENDERS "${always}"` };
 
     const started = ctx.correspondents.started(from);
     if (started !== undefined) {
@@ -88,7 +88,7 @@ export function decide(c: Candidate, ctx: DecideContext): Decision {
   }
 
   // Below the facts above: a sender you've also started a conversation with,
-  // or an allowlisted one, is still reported.
+  // or a trusted one, is still reported.
   if (from && !forged && ctx.correspondents.movedToSpam(from)) {
     return { outcome: "drop", reason: "your-spam-sender", detail: "you've moved mail from this sender to Spam yourself" };
   }

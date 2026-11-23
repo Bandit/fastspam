@@ -23,8 +23,8 @@ const cand = (over: Partial<Candidate> = {}): Candidate => ({
 const webmail = (local: string) => [local, "gmail.com"].join("@");
 
 const ctx = (over: Partial<IncomingContext> = {}): IncomingContext => ({
-  alwaysReport: ["trusted.example"],
-  neverReport: ["blocked.example"],
+  trustedSenders: ["trusted.example"],
+  spamSenders: ["blocked.example"],
   honourDmarcPolicy: true,
   correspondents: lookup({
     v: 3,
@@ -44,7 +44,7 @@ const outcome = (c: Partial<Candidate>, o: Partial<IncomingContext> = {}) => {
 describe("incoming mail rules", () => {
   it("skips mail that facts show is legitimate, without the model", () => {
     expect(outcome({ fromEmail: "owner@owner.example" })).toBe("skip:self");
-    expect(outcome({ fromEmail: "billing@trusted.example" })).toBe("skip:allowlist");
+    expect(outcome({ fromEmail: "billing@trusted.example" })).toBe("skip:trusted");
     expect(outcome({ fromEmail: "friend@client.example" })).toBe("skip:correspondent");
     expect(outcome({ fromEmail: "colleague@client.example" })).toBe("skip:known-domain");
     expect(outcome({ threadId: "T-yours" })).toBe("skip:conversation");
@@ -52,7 +52,7 @@ describe("incoming mail rules", () => {
 
   it("flags hard failures without the model", () => {
     expect(outcome({ fromEmail: "friend@client.example", auth: { dmarc: "fail", dmarcPolicy: "reject" } })).toBe("flag:dmarc-policy");
-    expect(outcome({ fromEmail: "x@blocked.example" })).toBe("flag:blocklist");
+    expect(outcome({ fromEmail: "x@blocked.example" })).toBe("flag:spam-sender");
   });
 
   it("trusts no sender-based fact when DMARC fails", () => {
@@ -89,7 +89,7 @@ describe("senders you've moved to Spam", () => {
       addresses: { "friend@client.example": 1, "pitch@cold.example": 1 },
       started: { "friend@client.example": 1 },
       self: ["owner@owner.example"],
-      spamSenders: { "pitch@cold.example": { seen: 1, received: 1 }, "friend@client.example": { seen: 1, received: 1 } },
+      movedToSpam: { "pitch@cold.example": { seen: 1, received: 1 }, "friend@client.example": { seen: 1, received: 1 } },
     }),
   });
   it("flags them as a fact, even in a conversation you replied in", () => {

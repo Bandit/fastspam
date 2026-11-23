@@ -98,8 +98,8 @@ try {
   const toModel = [];
   for (const c of candidates) {
     const d = decideIncoming(c, {
-      alwaysReport: config.alwaysReport,
-      neverReport: config.neverReport,
+      trustedSenders: config.trustedSenders,
+      spamSenders: config.spamSenders,
       honourDmarcPolicy: config.honourDmarcPolicy,
       correspondents: who,
       threadsWithYourMail: threads,

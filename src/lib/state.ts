@@ -35,7 +35,7 @@ export interface CorrespondentIndex {
    * threshold), learned by the Spam sweep: address → when last seen there and
    * when that message was received (epoch ms). Absent in older indexes.
    */
-  spamSenders?: Record<string, { seen: number; received: number }>;
+  movedToSpam?: Record<string, { seen: number; received: number }>;
 }
 
 /** A find waiting for the next digest. Only what the digest shows is kept. */
@@ -79,7 +79,7 @@ export interface IncomingFind {
   candidate: Pick<Candidate, "id" | "threadId" | "fromName" | "fromEmail" | "subject" | "receivedAt">;
   /** The checked folder it was found in. */
   mailboxId: string;
-  basis: "dmarc-policy" | "blocklist" | "your-spam-sender" | "model";
+  basis: "dmarc-policy" | "spam-sender" | "your-spam-sender" | "model";
   detail: string;
   /** P(spam) from the model. */
   pSpam?: number;
@@ -168,7 +168,7 @@ export interface JobState {
   /** Present once INCOMING_MAILBOXES is set. */
   incoming?: IncomingState;
   /**
-   * The sweep through all of Spam that learns spamSenders: a page per idle
+   * The sweep through all of Spam that learns movedToSpam: a page per idle
    * run, a full pass at most every few hours.
    */
   sweep?: { position: number; loopStartedAt: string; lastCompleteAt?: string };

@@ -40,9 +40,9 @@ export const TIER_OF: Record<Exclude<Category, "spam">, Tier> = {
 };
 
 /** Why a message was reported. Only `model` involves a model. */
-export type Basis = "allowlist" | "correspondent" | "thread" | "model";
+export type Basis = "trusted" | "correspondent" | "thread" | "model";
 
-export const DETERMINISTIC_BASES: readonly Basis[] = ["allowlist", "correspondent", "thread"];
+export const DETERMINISTIC_BASES: readonly Basis[] = ["trusted", "correspondent", "thread"];
 
 export type AuthResult = "pass" | "fail" | "softfail" | "neutral" | "none" | "temperror" | "permerror" | "policy" | "invalid";
 

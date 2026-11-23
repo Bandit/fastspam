@@ -571,8 +571,8 @@ async function reviewSlice(
   const toModel: { candidate: Candidate; item: Item }[] = [];
   for (const c of candidates) {
     const d = decide(c, {
-      neverReport: config.neverReport,
-      alwaysReport: config.alwaysReport,
+      spamSenders: config.spamSenders,
+      trustedSenders: config.trustedSenders,
       spamScoreSkipAbove: config.spamScoreSkipAbove,
       spamFilterThreshold: config.spamFilterThreshold,
       skipRead: config.spamSkipRead && !job.spam.autoRead,
@@ -730,7 +730,7 @@ async function checkAutoRead(ctx: Context, job: JobState, b: Boxes, now: Date): 
  * Learn who you've moved to Spam yourself: a page of Spam per idle run,
  * looking only at sender, score and authentication. A message scoring below
  * SPAM_FILTER_THRESHOLD got there by your hand (or your rules), and its sender
- * (unless DMARC says the From is forged) joins index.spamSenders. Mail you
+ * (unless DMARC says the From is forged) joins index.movedToSpam. Mail you
  * move to Spam keeps its original arrival time, so the Spam review, which
  * moves forward by arrival time, never sees it; this sweep does.
  *
@@ -776,7 +776,7 @@ async function sweepSpam(
   const rows = byQueryOrder(ids, res.get("g")?.list);
   const index = await loadIndex();
   const self = new Set(index.self);
-  const learned = (index.spamSenders ??= {});
+  const learned = (index.movedToSpam ??= {});
   const loopStart = Date.parse(sw.loopStartedAt);
   let indexChanged = false;
   for (const r of rows) {
@@ -800,7 +800,7 @@ async function sweepSpam(
     }
     const entries = Object.entries(learned);
     if (entries.length > MAX_SPAM_SENDERS) {
-      index.spamSenders = Object.fromEntries(entries.sort((x, y) => y[1].seen - x[1].seen).slice(0, MAX_SPAM_SENDERS));
+      index.movedToSpam = Object.fromEntries(entries.sort((x, y) => y[1].seen - x[1].seen).slice(0, MAX_SPAM_SENDERS));
       indexChanged = true;
     }
     sw.position = 0;
@@ -1013,8 +1013,8 @@ async function checkIncoming(
   const toModel: { x: (typeof toCheck)[number]; item: Item }[] = [];
   for (const x of toCheck) {
     const d = decideIncoming(x.c, {
-      alwaysReport: config.alwaysReport,
-      neverReport: config.neverReport,
+      trustedSenders: config.trustedSenders,
+      spamSenders: config.spamSenders,
       honourDmarcPolicy: config.honourDmarcPolicy,
       correspondents,
       threadsWithYourMail: threads,

@@ -60,7 +60,7 @@ function world() {
     ],
   });
   const ai = new FakeAi((m) => (m.subject.includes("receipt") ? { choice: "transactional", probabilities: dist("transactional", 0.9) } : { choice: "spam", probabilities: dist("spam", 0.9) }));
-  const env = testEnv({ AI: ai, ALWAYS_REPORT: "trusted.example", NEVER_REPORT: "blocked.example" });
+  const env = testEnv({ AI: ai, TRUSTED_SENDERS: "trusted.example", SPAM_SENDERS: "blocked.example" });
   return { fake, ai, env, ids: { friend, conversation, trusted, blocked, receipt, junk, forged } };
 }
 
@@ -73,7 +73,7 @@ describe("work runs", () => {
     expect(Object.fromEntries(suspects.map((s) => [s.candidate.id, s.basis]))).toEqual({
       [ids.friend.id]: "correspondent",
       [ids.conversation.id]: "thread",
-      [ids.trusted.id]: "allowlist",
+      [ids.trusted.id]: "trusted",
       [ids.receipt.id]: "model",
     });
     // One model call, about exactly the three messages no fact could settle.
@@ -275,7 +275,7 @@ describe("rescue", () => {
   it("caps moves per digest period, across runs", async () => {
     const spam = Array.from({ length: 5 }, (_, i) => spamEmail({ from: `p${i}@trusted.example`, subject: `s${i}`, daysAgo: 5 - i }));
     const fake = new FakeJmap({ emails: [...spam] });
-    const env = testEnv({ AI: new FakeAi(), ALWAYS_REPORT: "trusted.example", RESCUE_MAILBOX: "Rescued", FASTMAIL_WRITE_TOKEN: "write-token", SPAM_SLICE: "2", MAX_RESCUES_PER_DIGEST: "3" });
+    const env = testEnv({ AI: new FakeAi(), TRUSTED_SENDERS: "trusted.example", RESCUE_MAILBOX: "Rescued", FASTMAIL_WRITE_TOKEN: "write-token", SPAM_SLICE: "2", MAX_RESCUES_PER_DIGEST: "3" });
     const runs = await workUntilIdle(env, fake);
     expect(runs.flatMap((r) => r.rescue?.moved ?? [])).toHaveLength(3);
     expect(jobOf(env).rescueSkipped.map((s) => s.reason)).toEqual(["MAX_RESCUES_PER_DIGEST reached", "MAX_RESCUES_PER_DIGEST reached"]);
@@ -377,7 +377,7 @@ describe("the digest", () => {
     // Without a gateway the model can't run, so the slice stops at the first message needing it.
     await work(env, START, { fetchImpl: fake.fetch, ...quiet });
     const r = await work(env, START, { fetchImpl: fake.fetch, ...quiet });
-    expect(r.suspects.map((s) => s.basis).sort()).toEqual(["allowlist", "correspondent", "thread"]);
+    expect(r.suspects.map((s) => s.basis).sort()).toEqual(["correspondent", "thread", "trusted"]);
     const notifier = new Recorder();
     await digest(env, SLOT, { fetchImpl: fake.fetch, notifier, ...quiet });
     expect(notifier.sent[0]!.text).toMatch(/! google\/gemini-decision-1 runs through AI Gateway/);
@@ -505,7 +505,7 @@ describe("learning from what you do in Spam", () => {
     expect(reports.flatMap((r) => r.suspects).map((s) => s.candidate.subject)).toEqual(["Your receipt"]);
     // The two low scorers never reached the model.
     expect(ai.calls).toHaveLength(1);
-    expect(Object.keys(indexOf(env).spamSenders)).toEqual(["pitch@cold.example"]);
+    expect(Object.keys(indexOf(env).movedToSpam)).toEqual(["pitch@cold.example"]);
 
     // Their next message is filed by the filter, and isn't reported either.
     fake.emails.push(scored(9, "pitch@cold.example", "Your receipt is waiting", { daysAgo: 0.5 }));
@@ -521,12 +521,12 @@ describe("learning from what you do in Spam", () => {
     const recent = scored(1, "oops@friendly.example", "Hi", { daysAgo: 3 });
     fake.emails.push(recent);
     await workUntilIdle(env, fake);
-    expect(Object.keys(indexOf(env).spamSenders).sort()).toEqual(["oops@friendly.example", "pitch@cold.example"]);
+    expect(Object.keys(indexOf(env).movedToSpam).sort()).toEqual(["oops@friendly.example", "pitch@cold.example"]);
 
     recent.mailboxIds = { "mb-inbox": true }; // you moved it back
     fake.emails.splice(fake.emails.indexOf(handMoved), 1); // purged with old Spam
     for (const m of [60, 420, 435]) await work(env, at(START, m), { fetchImpl: fake.fetch, ...quiet });
-    expect(Object.keys(indexOf(env).spamSenders)).toEqual(["pitch@cold.example"]);
+    expect(Object.keys(indexOf(env).movedToSpam)).toEqual(["pitch@cold.example"]);
   });
 
   it("with SPAM_SKIP_READ, drops read Spam, unless Fastmail marks all spam read", async () => {
