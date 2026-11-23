@@ -14,7 +14,7 @@ import { matchesAny } from "./lib/match.ts";
 
 export type IncomingDecision =
   | { outcome: "skip"; reason: "self" | "allowlist" | "correspondent" | "known-domain" | "conversation"; detail: string }
-  | { outcome: "flag"; basis: "dmarc-policy" | "blocklist"; detail: string }
+  | { outcome: "flag"; basis: "dmarc-policy" | "blocklist" | "your-spam-sender"; detail: string }
   | { outcome: "model" };
 
 export interface IncomingContext {
@@ -41,6 +41,11 @@ export function decideIncoming(c: Candidate, ctx: IncomingContext): IncomingDeci
     if (always) return { outcome: "skip", reason: "allowlist", detail: `sender matches ALWAYS_REPORT "${always}"` };
     if (ctx.correspondents.started(from) !== undefined) {
       return { outcome: "skip", reason: "correspondent", detail: "you have started conversations with this address" };
+    }
+    // Your own judgement, and more specific than the domain and conversation
+    // facts below: you may have replied to them before moving their mail to Spam.
+    if (ctx.correspondents.movedToSpam(from)) {
+      return { outcome: "flag", basis: "your-spam-sender", detail: "you've moved mail from this sender to Spam before" };
     }
     // An organisation you have written to, and DMARC proves the mail really
     // came from its domain. Webmail domains never count (lib/freemail.ts). The

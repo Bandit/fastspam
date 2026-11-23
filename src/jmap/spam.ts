@@ -19,10 +19,10 @@ export interface FetchResult {
   total: number;
 }
 
-const AUTH = "header:Authentication-Results:asText:all";
+export const AUTH = "header:Authentication-Results:asText:all";
 
 export function emailProperties(opts: Pick<FetchOptions, "spamHeaders" | "previewChars">): string[] {
-  const props = ["id", "threadId", "subject", "from", "receivedAt", AUTH];
+  const props = ["id", "threadId", "subject", "from", "receivedAt", "keywords", AUTH];
   if (opts.previewChars > 0) props.push("preview");
   for (const h of opts.spamHeaders) if (isValidHeaderName(h)) props.push(`header:${h}:asText:all`);
   return props;
@@ -73,5 +73,6 @@ export function toCandidate(r: Record<string, unknown>, opts: Pick<FetchOptions,
     spamScore,
     spamHeaders,
     auth: parseAuthResults(Array.isArray(r[AUTH]) ? (r[AUTH] as string[]) : [], opts.trustedAuthservIds),
+    seen: !!(r.keywords as Record<string, boolean> | null | undefined)?.$seen,
   };
 }

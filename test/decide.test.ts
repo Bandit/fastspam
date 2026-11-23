@@ -86,3 +86,37 @@ describe("decision ladder", () => {
     expect(decide(cand(), ctx())).toEqual({ outcome: "model" });
   });
 });
+
+describe("your own judgement", () => {
+  const learned = lookup({
+    v: 3,
+    addresses: { "friend@mail.example": 1 },
+    started: { "friend@mail.example": 1 },
+    self: ["owner@owner.example"],
+    spamSenders: { "pitch@cold.example": { seen: 1, received: 1 }, "friend@mail.example": { seen: 1, received: 1 } },
+  });
+
+  it("drops Spam scoring below the filter's threshold: you put it there", () => {
+    expect(decide(cand({ spamScore: 2.4 }), ctx({ spamFilterThreshold: 5 }))).toMatchObject({ outcome: "drop", reason: "moved-by-you" });
+    // Even from someone you write to: moving it was the later, more specific judgement.
+    expect(decide(cand({ fromEmail: "friend@mail.example", spamScore: 0 }), ctx({ spamFilterThreshold: 5 })).outcome).toBe("drop");
+    expect(decide(cand({ spamScore: 5 }), ctx({ spamFilterThreshold: 5 })).outcome).toBe("model");
+    expect(decide(cand({ spamScore: null }), ctx({ spamFilterThreshold: 5 })).outcome).toBe("model");
+    expect(decide(cand({ spamScore: 2.4 }), ctx({ spamFilterThreshold: 0 })).outcome).toBe("model");
+  });
+
+  it("drops read Spam only with SPAM_SKIP_READ", () => {
+    expect(decide(cand({ seen: true }), ctx({ skipRead: true }))).toMatchObject({ outcome: "drop", reason: "read" });
+    expect(decide(cand({ seen: true }), ctx()).outcome).toBe("model");
+    expect(decide(cand({ seen: false }), ctx({ skipRead: true })).outcome).toBe("model");
+  });
+
+  it("drops a sender you've moved to Spam before, unless a fact says otherwise", () => {
+    expect(decide(cand({ fromEmail: "pitch@cold.example" }), ctx({ correspondents: learned }))).toMatchObject({ outcome: "drop", reason: "your-spam-sender" });
+    // You started a conversation with them: still reported.
+    expect(decide(cand({ fromEmail: "friend@mail.example" }), ctx({ correspondents: learned })).outcome).toBe("report");
+    expect(decide(cand({ fromEmail: "pitch@cold.example" }), ctx({ correspondents: learned, alwaysReport: ["cold.example"] })).outcome).toBe("report");
+    // A forged From proves nothing about the sender.
+    expect(decide(cand({ fromEmail: "pitch@cold.example", auth: { dmarc: "fail" } }), ctx({ correspondents: learned })).outcome).toBe("model");
+  });
+});

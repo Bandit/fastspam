@@ -36,6 +36,16 @@ export interface Config {
   previewChars: number;
   spamHeaders: string[];
   spamScoreSkipAbove: number | null;
+  /**
+   * The score at which Fastmail moves mail to Spam (Standard 5, Aggressive 4,
+   * or your Custom value). Spam scoring lower got there by your action or your
+   * rules: it is never reported, and its senders are learned. 0 = off.
+   */
+  spamFilterThreshold: number;
+  /** Learn the senders of mail you moved to Spam yourself (needs spamFilterThreshold). */
+  learnSpamSenders: boolean;
+  /** Never report Spam you've read and left there. Off by default: some apps mark mail read on preview. */
+  spamSkipRead: boolean;
   /** Authentication-Results from these authserv-ids (and subdomains) are trusted. */
   trustedAuthservIds: string[];
 
@@ -191,6 +201,9 @@ export function loadConfig(env: Env): Config {
     previewChars: clamp(Math.floor(num(env.PREVIEW_CHARS, 200)), 0, 256),
     spamHeaders: env.SPAM_HEADERS === undefined ? DEFAULT_SPAM_HEADERS : list(env.SPAM_HEADERS),
     spamScoreSkipAbove: optionalNum(env.SPAM_SCORE_SKIP_ABOVE),
+    spamFilterThreshold: clamp(num(env.SPAM_FILTER_THRESHOLD, 5), 0, 1000),
+    learnSpamSenders: bool(env.LEARN_SPAM_SENDERS, true),
+    spamSkipRead: bool(env.SPAM_SKIP_READ),
     trustedAuthservIds: env.TRUSTED_AUTHSERV_IDS === undefined ? DEFAULT_TRUSTED_AUTHSERV_IDS : list(env.TRUSTED_AUTHSERV_IDS),
 
     alwaysReport: list(env.ALWAYS_REPORT),

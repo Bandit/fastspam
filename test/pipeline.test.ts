@@ -483,3 +483,76 @@ describe("alerts about repeated failures", () => {
     expect((await go(75)).kind).toBe("work");
   });
 });
+
+describe("learning from what you do in Spam", () => {
+  const scored = (score: number, from: string, subject: string, extra: Record<string, unknown> = {}) =>
+    spamEmail({ from, subject, headers: { "x-spam-score": [String(score)], "authentication-results": ["mx.messagingengine.com; dmarc=pass"] }, ...extra });
+  const indexOf = (env: Env) => JSON.parse((env.FASTSPAM_STATE as unknown as MemoryKV).store.get("index")!);
+
+  function setup(over: Record<string, unknown> = {}) {
+    const handMoved = scored(0.7, "pitch@cold.example", "We are live", { daysAgo: 40, keywords: { $seen: true } });
+    const forgedMove = spamEmail({ from: "ceo@bank.example", subject: "Wire", daysAgo: 30, headers: { "x-spam-score": ["1"], "authentication-results": ["mx.messagingengine.com; dmarc=fail"] } });
+    const filed = scored(12, "promo@shop.example", "Your receipt");
+    const fake = new FakeJmap({ emails: [handMoved, forgedMove, filed, sentEmail("friend@mail.example", 30)] });
+    const ai = new FakeAi((m) => (m.subject.includes("receipt") ? { choice: "transactional", probabilities: dist("transactional", 0.9) } : { choice: "spam", probabilities: dist("spam", 0.9) }));
+    const env = testEnv({ AI: ai, ...over });
+    return { fake, ai, env, handMoved, forgedMove, filed };
+  }
+
+  it("never reports what you moved to Spam, and learns its sender (not a forged one)", async () => {
+    const { fake, ai, env, handMoved } = setup();
+    const reports = await workUntilIdle(env, fake);
+    expect(reports.flatMap((r) => r.suspects).map((s) => s.candidate.subject)).toEqual(["Your receipt"]);
+    // The two low scorers never reached the model.
+    expect(ai.calls).toHaveLength(1);
+    expect(Object.keys(indexOf(env).spamSenders)).toEqual(["pitch@cold.example"]);
+
+    // Their next message is filed by the filter, and isn't reported either.
+    fake.emails.push(scored(9, "pitch@cold.example", "Your receipt is waiting", { daysAgo: 0.5 }));
+    const later = await work(env, at(START, 15), { fetchImpl: fake.fetch, ...quiet });
+    expect(later.reviewed).toHaveLength(1);
+    expect(later.suspects).toHaveLength(0);
+    expect(ai.calls).toHaveLength(1);
+    void handMoved;
+  });
+
+  it("forgets a sender whose recent mail you moved back out, and keeps one whose mail aged out", async () => {
+    const { fake, env, handMoved } = setup();
+    const recent = scored(1, "oops@friendly.example", "Hi", { daysAgo: 3 });
+    fake.emails.push(recent);
+    await workUntilIdle(env, fake);
+    expect(Object.keys(indexOf(env).spamSenders).sort()).toEqual(["oops@friendly.example", "pitch@cold.example"]);
+
+    recent.mailboxIds = { "mb-inbox": true }; // you moved it back
+    fake.emails.splice(fake.emails.indexOf(handMoved), 1); // purged with old Spam
+    for (const m of [60, 420, 435]) await work(env, at(START, m), { fetchImpl: fake.fetch, ...quiet });
+    expect(Object.keys(indexOf(env).spamSenders)).toEqual(["pitch@cold.example"]);
+  });
+
+  it("with SPAM_SKIP_READ, drops read Spam, unless Fastmail marks all spam read", async () => {
+    const { fake, ai, env } = setup({ SPAM_SKIP_READ: "true" });
+    fake.emails.push(scored(12, "news@letters.example", "Your receipt, read", { keywords: { $seen: true } }));
+    const reports = await workUntilIdle(env, fake);
+    expect(reports.flatMap((r) => r.suspects).map((s) => s.candidate.subject)).toEqual(["Your receipt"]);
+    expect(jobOf(env).spam.autoRead).toBeFalsy(); // too few messages to tell, so the rule applies
+    void ai;
+
+    const auto = setup({ SPAM_SKIP_READ: "true" });
+    for (let i = 0; i < 25; i++) auto.fake.emails.push(scored(12, `x${i}@spam.example`, `Offer ${i}`, { keywords: { $seen: true } }));
+    auto.fake.emails.push(scored(12, "news@letters.example", "Your receipt, read", { keywords: { $seen: true } }));
+    const r2 = await workUntilIdle(auto.env, auto.fake);
+    expect(jobOf(auto.env).spam.autoRead).toBe(true);
+    expect(jobOf(auto.env).stats.notes.join(" ")).toMatch(/SPAM_SKIP_READ is being ignored/);
+    expect(r2.flatMap((r) => r.suspects).map((s) => s.candidate.subject).sort()).toEqual(["Your receipt", "Your receipt, read"]);
+  });
+
+  it("with SPAM_SKIP_READ, leaves out of the digest a find you've since read", async () => {
+    const { fake, env, filed } = setup({ SPAM_SKIP_READ: "true" });
+    await workUntilIdle(env, fake);
+    filed.keywords = { $seen: true };
+    const notifier = new Recorder();
+    const d = await digest(env, SLOT, { fetchImpl: fake.fetch, notifier, ...quiet });
+    expect(d.listed).toBe(0);
+    expect(d.message!.text).toContain("1 earlier find you'd read and left in Spam isn't listed.");
+  });
+});

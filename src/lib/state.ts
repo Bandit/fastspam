@@ -30,6 +30,12 @@ export interface CorrespondentIndex {
   started: Record<string, number>;
   /** addresses you send FROM. Spam often forges these, so they never count as correspondents. */
   self: string[];
+  /**
+   * Senders of mail you moved to Spam yourself (it scores below the filter's
+   * threshold), learned by the Spam sweep: address → when last seen there and
+   * when that message was received (epoch ms). Absent in older indexes.
+   */
+  spamSenders?: Record<string, { seen: number; received: number }>;
 }
 
 /** A find waiting for the next digest. Only what the digest shows is kept. */
@@ -73,7 +79,7 @@ export interface IncomingFind {
   candidate: Pick<Candidate, "id" | "threadId" | "fromName" | "fromEmail" | "subject" | "receivedAt">;
   /** The checked folder it was found in. */
   mailboxId: string;
-  basis: "dmarc-policy" | "blocklist" | "model";
+  basis: "dmarc-policy" | "blocklist" | "your-spam-sender" | "model";
   detail: string;
   /** P(spam) from the model. */
   pSpam?: number;
@@ -144,6 +150,10 @@ export interface JobState {
     newEdge: Edge[];
   };
   spam: {
+    /** Fastmail's "Mark spam as read" looks to be on, so read status in Spam means nothing. */
+    autoRead?: boolean;
+    /** When autoRead was last worked out (ISO). */
+    autoReadCheckedAt?: string;
     /** receivedAt of the newest Spam message reviewed (ISO). Unset until the first slice. */
     cursor?: string;
     /** Reviewed messages within a second of the cursor, which the next query re-reads. */
@@ -157,6 +167,11 @@ export interface JobState {
   stats: PeriodStats;
   /** Present once INCOMING_MAILBOXES is set. */
   incoming?: IncomingState;
+  /**
+   * The sweep through all of Spam that learns spamSenders: a page per idle
+   * run, a full pass at most every few hours.
+   */
+  sweep?: { position: number; loopStartedAt: string; lastCompleteAt?: string };
   /** Work runs in a row that hit a problem, and when the first of them ran. */
   failStreak?: { runs: number; since: string; alertedAt?: string };
 }

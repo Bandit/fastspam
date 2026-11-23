@@ -98,6 +98,8 @@ export interface CorrespondentLookup {
   startedDomain(addr: string): boolean;
   isSelf(addr: string): boolean;
   self: ReadonlySet<string>;
+  /** true if you have moved mail from this exact address to Spam yourself (never your own addresses). */
+  movedToSpam(addr: string): boolean;
 }
 
 export function lookup(index: CorrespondentIndex | undefined): CorrespondentLookup {
@@ -114,5 +116,6 @@ export function lookup(index: CorrespondentIndex | undefined): CorrespondentLook
     startedDomain: (a) => !self.has(a) && startedDomains.has(domainOf(a)),
     isSelf: (a) => self.has(a),
     self,
+    movedToSpam: (a) => !self.has(a) && !!usable?.spamSenders?.[a],
   };
 }

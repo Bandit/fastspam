@@ -68,6 +68,8 @@ export interface Candidate {
   /** Raw values of the SPAM_HEADERS that were present (for the preview script). */
   spamHeaders: Record<string, string>;
   auth: AuthSummary;
+  /** Marked read ($seen). */
+  seen?: boolean;
 }
 
 export interface Verdict {

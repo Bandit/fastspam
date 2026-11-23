@@ -31,6 +31,7 @@ then see [Deploy with the button](#deploy-with-the-button).
 - [First run: preview](#first-run-preview)
 - [Configuration](#configuration)
 - [Rules](#rules)
+- [Fastmail's spam settings](#fastmails-spam-settings)
 - [Rescuing (optional)](#rescuing-optional)
 - [Checking incoming mail](#checking-incoming-mail)
 - [Evaluation](#evaluation)
@@ -50,11 +51,14 @@ Each message in Spam goes down this ladder. The first rule that matches decides 
 |---|---|---|---|
 | 1 | Sender matches `NEVER_REPORT` | dropped | — |
 | 2 | Fails DMARC, and the sender's own domain publishes `p=quarantine` or `p=reject` | dropped | — |
-| 3 | Spam score above `SPAM_SCORE_SKIP_ABOVE` (off by default) | dropped | — |
-| 4 | Sender matches `ALWAYS_REPORT` | reported | fact, important |
-| 5 | You have *started* a conversation with this exact address | reported | fact, important |
-| 6 | Message is in a conversation that has mail you *received and kept* | reported | fact, important |
-| 7 | Anything else | the model decides | model's judgement, by [tier](#tiers) |
+| 3 | Spam score below `SPAM_FILTER_THRESHOLD` (5): the filter didn't put it in Spam, so you did | dropped | — |
+| 4 | Spam score above `SPAM_SCORE_SKIP_ABOVE` (off by default) | dropped | — |
+| 5 | You've read it, with `SPAM_SKIP_READ` (off by default) | dropped | — |
+| 6 | Sender matches `ALWAYS_REPORT` | reported | fact, important |
+| 7 | You have *started* a conversation with this exact address | reported | fact, important |
+| 8 | Message is in a conversation that has mail you *received and kept* | reported | fact, important |
+| 9 | You've moved mail from this exact address to Spam yourself before | dropped | — |
+| 10 | Anything else | the model decides | model's judgement, by [tier](#tiers) |
 
 Rule 2 follows the sender's own instruction. A domain that publishes a DMARC policy of
 quarantine or reject is saying that mail failing its checks is not genuine, so fastspam drops it
@@ -63,20 +67,32 @@ this. In testing on a real Spam folder, the only message a model wanted to repor
 government "licence renewal" email whose domain publishes `p=reject`. Turn the rule off with
 `HONOUR_DMARC_POLICY=false`.
 
-Rules 4 to 6 are facts about your own mailbox. They cost nothing, and a cleverly worded spam
+Rules 6 to 8 are facts about your own mailbox. They cost nothing, and a cleverly worded spam
 subject cannot argue with them. They also cover the most common cases: someone you have
 written to, or a reply in an existing conversation.
 
+Rules 3, 5 and 9 respect your own judgement. Fastmail's filter only files mail at or above its
+threshold, so a message in Spam that scores lower got there because you (or one of your rules)
+put it there, and fastspam won't argue with you about it. It also remembers who sent it: a
+sweep through Spam on quiet runs learns the senders of mail you moved there, and their later
+mail is never reported, even when the filter files it (rule 9), and is flagged if it gets
+through to your inbox (see [Checking incoming mail](#checking-incoming-mail)). That is the
+nearest fastspam can get to your Fastmail block list, which the API doesn't expose. A forged
+From (failed DMARC) is never learned. If you move that mail back out of Spam within a few
+weeks, the sender is forgotten again on the next sweep. Rules 3 and 9 need
+`SPAM_FILTER_THRESHOLD` to match your Fastmail settings: see
+[Fastmail's spam settings](#fastmails-spam-settings).
+
 Both facts are deliberately narrower than "you've been in touch". **Replying proves little.**
-People reply to spammers, to unsubscribe, to complain, or on purpose. So rule 5 counts only
+People reply to spammers, to unsubscribe, to complain, or on purpose. So rule 7 counts only
 messages you *started*: a Sent message with no `In-Reply-To` or `References` header and no
-`Re:`-style subject. Nobody cold-emails a spammer. Rule 6 ignores your own messages in a
+`Re:`-style subject. Nobody cold-emails a spammer. Rule 8 ignores your own messages in a
 thread, because your reply to a spammer would otherwise make their whole thread look real. It
 needs a message from the other side that you kept, outside Spam, Trash and Sent. An address
 you have only ever replied to goes to the model, which is told so (`replied_before`) and is
 told that this is weak evidence.
 
-Rules 4 and 5 rely on the From address, which senders can forge. They are skipped whenever
+Rules 6, 7 and 9 rely on the From address, which senders can forge. They are skipped whenever
 DMARC fails, even if the domain publishes no policy, so a forged sender goes to the model, with
 the failed check visible to it, instead of being waved through. DMARC results are read only
 from `Authentication-Results` headers stamped by Fastmail's own servers (see
@@ -129,7 +145,7 @@ them:
 
 | Tier | Digest heading | What goes in it |
 |---|---|---|
-| `important` | 🔴 IMPORTANT | receipts, orders, deliveries, bookings, invoices, account and security notices, mail from people, and every fact (rules 4 to 6) |
+| `important` | 🔴 IMPORTANT | receipts, orders, deliveries, bookings, invoices, account and security notices, mail from people, and every fact (rules 6 to 8) |
 | `general` | 🟠 WORTH A LOOK | newsletters and editorial mail you plausibly subscribed to, and `unclear` |
 | `promotional` | 🔵 PROMOTIONS | sales and offers from companies you plausibly buy from, listed one line each |
 
@@ -467,6 +483,9 @@ These go in `vars` in `wrangler.jsonc`.
 | `MAX_SLICES_PER_RUN` | `1` | slices of work per run; raise on Workers Paid to catch up faster |
 | `BACKLOG_DAYS` | empty | how far back the first pass through Spam starts; empty = all of it |
 | `ALWAYS_REPORT` / `NEVER_REPORT` | empty | sender patterns, see [Rules](#rules) |
+| `SPAM_FILTER_THRESHOLD` | `5` | the score at which Fastmail moves mail to Spam; see [Fastmail's spam settings](#fastmails-spam-settings). `0` turns off rules 3 and 9 |
+| `LEARN_SPAM_SENDERS` | `true` | learn the senders of mail you moved to Spam (rule 9, and the incoming check) |
+| `SPAM_SKIP_READ` | `false` | never report Spam you've read and left there (rule 5) |
 | `SPAM_SCORE_SKIP_ABOVE` | empty | drop messages scoring above this without asking the model |
 | `SPAM_HEADERS` | `X-Spam-score` | headers checked for a spam score |
 | `SPAM_MAILBOX` / `SENT_MAILBOX` | auto | mailbox name, path or id, if auto-detection fails |
@@ -506,6 +525,27 @@ To change a setting for your own deployment without editing `wrangler.jsonc`, pu
 
 `NEVER_REPORT` is checked first. Use it to silence a sender who keeps turning up. Use
 `ALWAYS_REPORT` for senders you always want to see if they land in Spam.
+
+## Fastmail's spam settings
+
+These are under **Settings → Spam protection** in Fastmail, and three of them matter here.
+
+- **Protection level.** fastspam needs to know the score at which Fastmail moves mail to Spam:
+  *Standard* is 5 and *Aggressive* is 4 (choose *Custom* to see the number). We suggest
+  *Custom*, so the number is in front of you, and setting `SPAM_FILTER_THRESHOLD` to the same
+  value. If they don't match, rules 3 and 9 go wrong: set too high, filtered spam looks like
+  mail you moved yourself and its senders are learned; set too low, mail you moved isn't
+  recognised. `SPAM_FILTER_THRESHOLD=0` turns both rules off.
+- **Permanently delete messages with a score of …** Mail deleted this way never reaches Spam,
+  so fastspam never sees it. Real mail can score high: promotions people had subscribed to
+  scored 12 to 15 in testing. Leave this off if you want fastspam to catch those.
+- **Mark spam as read.** With this on, everything in Spam is read, so `SPAM_SKIP_READ` would
+  drop everything. fastspam notices (when at least half of Spam is read), ignores
+  `SPAM_SKIP_READ`, and says so in the digest. Leave it off if you want to use
+  `SPAM_SKIP_READ`.
+
+Each folder also has a setting to learn its mail as spam or not spam: see
+[Quarantine](#quarantine-optional).
 
 ## Rescuing (optional)
 
@@ -547,8 +587,10 @@ Folders are names or paths, with `/` or `.` between levels. Spam can't be one of
 - **Facts first, as in Spam.** These settle a message without a model: you started a
   conversation with the sender; DMARC proves it came from an organisation's domain you've
   written to (never a webmail domain); it's in a conversation you wrote in; `ALWAYS_REPORT`;
-  your own addresses. Mail that fails DMARC from a domain whose policy says to quarantine or
-  reject it is flagged on that fact alone, as is a `NEVER_REPORT` sender. Only what's left
+  your own addresses. These are flagged on a fact alone: mail that fails DMARC from a domain
+  whose policy says to quarantine or reject it; a sender you've moved to Spam yourself before
+  (learned as described in [How decisions are made](#how-decisions-are-made)), even in a
+  conversation you replied to; and a `NEVER_REPORT` sender. Only what's left
   goes to the model, told that the messages came from the inbox. On the author's mail, about
   one message in ten reached the model.
 - **Flagged when the model is confident.** P(spam) at or above `INCOMING_THRESHOLD` (0.7).
@@ -579,7 +621,7 @@ easy to spot and move back.
 What moves, and the limits:
 
 - **Facts always**: a DMARC failure from a domain that says to quarantine or reject such mail,
-  or a `NEVER_REPORT` sender.
+  a sender you've moved to Spam yourself before, or a `NEVER_REPORT` sender.
 - **Model verdicts at `QUARANTINE_THRESHOLD` (0.9) or above.** This is stricter than
   `INCOMING_THRESHOLD` on purpose: moving mail out of sight should take more certainty than
   mentioning it. Unlike [rescuing](#rescuing-optional), quarantine acts on a model's judgement
@@ -758,6 +800,7 @@ any of them is reliable.
   `openai/decisions` send this data, through AI Gateway, to Google or OpenAI.
 - **In your KV namespace**: the addresses you've sent mail to and, separately, the ones you
   started a conversation with, each with the date you last did, and your own sending addresses.
+  Also the addresses of senders whose mail you moved to Spam yourself.
   Also how far the review of Sent and Spam (and any incoming check) has got, and the finds
   waiting for the next digest or incoming report (sender, subject, date and reason for each,
   as the report will show them).
@@ -798,16 +841,16 @@ account; `npm run preview` shows what yours does:
   measured at, and Gemini barely cares. `BATCH_SIZE=1` is the documented way to use these
   models, at the cost of more calls.
 - **Replying to spam you kept.** If you reply to a spammer and leave their message in your
-  Inbox or Archive, rule 6 treats later replies *in that same thread* as a real conversation.
-  Rule 6 can't tell that apart from replying to a genuine stranger. Delete or re-file the spam,
+  Inbox or Archive, rule 8 treats later replies *in that same thread* as a real conversation.
+  Rule 8 can't tell that apart from replying to a genuine stranger. Delete or re-file the spam,
   or add the sender to `NEVER_REPORT`, which is checked before every other rule.
 - **People you only ever reply to.** Someone who always writes first (an accountant, a
-  tradesperson) is never a rule 5 fact, because you never start the conversation. Replies in
-  an existing thread are still caught by rule 6. A *new* thread from them goes to the model,
+  tradesperson) is never a rule 7 fact, because you never start the conversation. Replies in
+  an existing thread are still caught by rule 8. A *new* thread from them goes to the model,
   which sees `replied_before`. Add them to `ALWAYS_REPORT` if that isn't enough.
 - **Conversations can be faked.** A spammer who knows the Message-ID of an email in your Inbox
   (from a public mailing list, for example) can make their message thread with it, which
-  triggers rule 6. The result is a line in the digest and, if rescuing is on, a move to
+  triggers rule 8. The result is a line in the digest and, if rescuing is on, a move to
   `RESCUE_MAILBOX`, never to your Inbox.
 - **Authentication results.** Fastmail writes several `Authentication-Results` headers per
   message (one each for PTR, BIMI, ARC, and DKIM plus DMARC). Only those stamped with a server

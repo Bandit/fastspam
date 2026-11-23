@@ -70,6 +70,14 @@
     "NEVER_REPORT": "",
     // Leave empty until the preview shows what scores your spam carries.
     "SPAM_SCORE_SKIP_ABOVE": "",
+    // The score at which Fastmail moves mail to Spam (Standard 5, Aggressive
+    // 4, or your Custom value). Spam scoring lower is mail you moved there:
+    // never reported, and its senders are learned. 0 = off.
+    "SPAM_FILTER_THRESHOLD": "5",
+    "LEARN_SPAM_SENDERS": "true",
+    // Never report Spam you've read and left there. Off by default: some mail
+    // apps mark messages read just by previewing them.
+    "SPAM_SKIP_READ": "false",
 
     // Optional: move fact-based suspects out of Spam into this mailbox.
     // Needs FASTMAIL_WRITE_TOKEN. Empty = report only, never touch mail.

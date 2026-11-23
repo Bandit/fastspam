@@ -81,3 +81,23 @@ describe("incoming mail rules", () => {
     expect(buildPayload([], "n", "incoming")).not.toMatch(/Junk/);
   });
 });
+
+describe("senders you've moved to Spam", () => {
+  const withLearned = (): Partial<IncomingContext> => ({
+    correspondents: lookup({
+      v: 3,
+      addresses: { "friend@client.example": 1, "pitch@cold.example": 1 },
+      started: { "friend@client.example": 1 },
+      self: ["owner@owner.example"],
+      spamSenders: { "pitch@cold.example": { seen: 1, received: 1 }, "friend@client.example": { seen: 1, received: 1 } },
+    }),
+  });
+  it("flags them as a fact, even in a conversation you replied in", () => {
+    const d = decideIncoming(cand({ fromEmail: "pitch@cold.example", threadId: "T-yours" }), ctx(withLearned()));
+    expect(d).toMatchObject({ outcome: "flag", basis: "your-spam-sender" });
+  });
+  it("still skips someone you started a conversation with, and ignores a forged From", () => {
+    expect(decideIncoming(cand({ fromEmail: "friend@client.example" }), ctx(withLearned())).outcome).toBe("skip");
+    expect(decideIncoming(cand({ fromEmail: "pitch@cold.example", auth: { dmarc: "fail" } }), ctx(withLearned())).outcome).toBe("model");
+  });
+});

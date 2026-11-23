@@ -24,6 +24,8 @@ export interface RunStats {
   indexing?: { indexed: number; total: number | null };
   /** Finds left out because they had already left Spam. */
   leftSpam?: number;
+  /** Finds left out because you'd read them and left them in Spam (SPAM_SKIP_READ). */
+  readInSpam?: number;
   /** The incoming check's week, when it is switched on. */
   incoming?: { checked: number; flagged: number; quarantined: number };
 }
@@ -153,6 +155,9 @@ export function renderDigest(input: DigestInput): Message | null {
       `Incoming check: ${checked} new message${checked === 1 ? "" : "s"} checked, ${flagged} flagged as possible spam` +
         `${quarantined ? `, ${quarantined} moved to quarantine` : ""} (listed in the incoming reports).`,
     );
+  }
+  if (stats.readInSpam) {
+    lines.push(`${stats.readInSpam} earlier find${stats.readInSpam === 1 ? "" : "s"} you'd read and left in Spam ${stats.readInSpam === 1 ? "isn't" : "aren't"} listed.`);
   }
   for (const n of stats.notes) lines.push(`Note: ${n}`);
   if (stats.failures.length) {

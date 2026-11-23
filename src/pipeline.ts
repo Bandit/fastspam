@@ -4,7 +4,7 @@ import { DETERMINISTIC_BASES } from "./types.ts";
 import { Budget } from "./lib/budget.ts";
 import { JmapClient, type FetchImpl, type Session } from "./jmap/client.ts";
 import { findMailbox, listMailboxes, mailboxPath, resolveMailbox, type Mailbox } from "./jmap/mailboxes.ts";
-import { emailProperties, toCandidate } from "./jmap/spam.ts";
+import { AUTH, emailProperties, toCandidate } from "./jmap/spam.ts";
 import { threadsWithRealMail, threadsWithYourMail } from "./jmap/threads.ts";
 import { FASTSPAM_HEADER } from "./jmap/append.ts";
 import { decideIncoming } from "./incoming.ts";
@@ -79,6 +79,19 @@ const MAX_INCOMING_PENDING = 100;
 const ALERT_AFTER_RUNS = 3;
 /** While the problem lasts, the alert repeats at most this often. */
 const ALERT_REPEAT_MS = 24 * 60 * MINUTE;
+/** A full pass of the Spam sweep starts at most this often. */
+const SWEEP_EVERY_MS = 6 * 60 * MINUTE;
+/** How often to check whether all of Spam is marked read (for SPAM_SKIP_READ). */
+const AUTO_READ_CHECK_MS = 6 * 60 * MINUTE;
+/**
+ * A learned sender whose mail is no longer in Spam is forgotten if that mail
+ * arrived within this many days: too recent for Spam's automatic deletion, so
+ * you probably moved it back out. Older ones were most likely purged, and are
+ * kept for SPAM_SENDER_KEEP_MS.
+ */
+const SPAM_SENDER_RECENT_MS = 20 * DAY;
+const SPAM_SENDER_KEEP_MS = 365 * DAY;
+const MAX_SPAM_SENDERS = 5000;
 
 export interface RunOptions {
   fetchImpl?: FetchImpl;
@@ -356,6 +369,15 @@ async function workSlices(ctx: Context, job: JobState, now: Date, dirty: boolean
     return index;
   };
 
+  // SPAM_SKIP_READ means nothing if Fastmail marks all spam read; check now and then.
+  if (config.spamSkipRead && job.sent.historyComplete) {
+    try {
+      if (await checkAutoRead(ctx, job, b, now)) jobChanged = true;
+    } catch (err) {
+      report.failures.push(`could not check whether Spam is marked read: ${errorMessage(err)}`);
+    }
+  }
+
   // The incoming check first: it's the time-sensitive part. A failure here is
   // recorded and doesn't hold up the Spam review.
   if (config.incomingMailboxes.length && job.sent.historyComplete) {
@@ -482,6 +504,17 @@ async function workSlices(ctx: Context, job: JobState, now: Date, dirty: boolean
     }
   }
 
+  // On an otherwise quiet run, a page of the sweep that learns who you've moved to Spam.
+  if (report.idle && config.learnSpamSenders && config.spamFilterThreshold > 0 && budget.remaining >= SLICE_RESERVE) {
+    try {
+      const swept = await sweepSpam(ctx, job, b, now, loadIndex);
+      if (swept.job) jobChanged = true;
+      if (swept.index) indexChanged = true;
+    } catch (err) {
+      report.failures.push(`learning from Spam failed: ${errorMessage(err)}`);
+    }
+  }
+
   recordFailures(job.stats.failures, report.failures, now);
   jobChanged ||= report.failures.length > 0 || job.stats.notes.length !== linesBefore;
   if (countFailedRun(job, report.failures.length > 0, now)) jobChanged = true;
@@ -541,6 +574,8 @@ async function reviewSlice(
       neverReport: config.neverReport,
       alwaysReport: config.alwaysReport,
       spamScoreSkipAbove: config.spamScoreSkipAbove,
+      spamFilterThreshold: config.spamFilterThreshold,
+      skipRead: config.spamSkipRead && !job.spam.autoRead,
       honourDmarcPolicy: config.honourDmarcPolicy,
       correspondents,
       threadsWithRealMail: threads,
@@ -662,6 +697,118 @@ function toPending(s: Suspect, moved: boolean): PendingSuspect {
   return p;
 }
 
+// ---------------------------------------------------------------- learning from Spam
+
+/**
+ * Whether Spam is marked read wholesale (Fastmail's "Mark spam as read"), in
+ * which case SPAM_SKIP_READ would drop everything and is ignored. Two counts,
+ * at most every few hours. Returns whether the job changed.
+ */
+async function checkAutoRead(ctx: Context, job: JobState, b: Boxes, now: Date): Promise<boolean> {
+  const checked = job.spam.autoReadCheckedAt ? Date.parse(job.spam.autoReadCheckedAt) : NaN;
+  if (Number.isFinite(checked) && now.getTime() - checked < AUTO_READ_CHECK_MS) return false;
+  const { accountId } = b.session;
+  const res = await ctx.client.request([
+    ["Email/query", { accountId, filter: { inMailbox: b.junk.id }, limit: 0, calculateTotal: true }, "all"],
+    ["Email/query", { accountId, filter: { inMailbox: b.junk.id, hasKeyword: "$seen" }, limit: 0, calculateTotal: true }, "read"],
+  ]);
+  const total = Number(res.get("all")?.total ?? 0);
+  const read = Number(res.get("read")?.total ?? 0);
+  job.spam.autoReadCheckedAt = now.toISOString();
+  // Too little to tell: keep what we thought.
+  if (total >= 20) {
+    const auto = read / total >= 0.5;
+    if (auto && !job.spam.autoRead) {
+      addLines(job.stats.notes, [`SPAM_SKIP_READ is being ignored: ${read} of ${total} messages in Spam are marked read, so Fastmail's "Mark spam as read" looks to be on.`]);
+    }
+    job.spam.autoRead = auto;
+  }
+  return true;
+}
+
+/**
+ * Learn who you've moved to Spam yourself: a page of Spam per idle run,
+ * looking only at sender, score and authentication. A message scoring below
+ * SPAM_FILTER_THRESHOLD got there by your hand (or your rules), and its sender
+ * (unless DMARC says the From is forged) joins index.spamSenders. Mail you
+ * move to Spam keeps its original arrival time, so the Spam review, which
+ * moves forward by arrival time, never sees it; this sweep does.
+ *
+ * At the end of each full pass, senders no longer seen are forgotten if their
+ * mail was recent (you probably moved it back out), and kept for a year
+ * otherwise (it was probably deleted with the rest of Spam).
+ */
+async function sweepSpam(
+  ctx: Context,
+  job: JobState,
+  b: Boxes,
+  now: Date,
+  loadIndex: () => Promise<CorrespondentIndex>,
+): Promise<{ job: boolean; index: boolean }> {
+  const { config, client } = ctx;
+  const prev = job.sweep;
+  // Between passes: wait SWEEP_EVERY_MS after the last one finished.
+  if (prev?.position === 0 && prev.lastCompleteAt && now.getTime() - Date.parse(prev.lastCompleteAt) < SWEEP_EVERY_MS) {
+    return { job: false, index: false };
+  }
+  if (!prev || prev.position === 0) {
+    job.sweep = { position: 0, loopStartedAt: now.toISOString(), ...(prev?.lastCompleteAt ? { lastCompleteAt: prev.lastCompleteAt } : {}) };
+  }
+  const sw = job.sweep!;
+  const { accountId } = b.session;
+  const res = await client.request([
+    [
+      "Email/query",
+      { accountId, filter: { inMailbox: b.junk.id }, sort: [{ property: "receivedAt", isAscending: true }], position: sw.position, limit: config.sentPage },
+      "q",
+    ],
+    [
+      "Email/get",
+      {
+        accountId,
+        "#ids": { resultOf: "q", name: "Email/query", path: "/ids" },
+        properties: ["id", "from", "receivedAt", AUTH, ...emailProperties({ spamHeaders: config.spamHeaders, previewChars: 0 }).filter((p) => p.startsWith("header:") && p !== AUTH)],
+      },
+      "g",
+    ],
+  ]);
+  const ids = (res.get("q")?.ids as string[] | undefined) ?? [];
+  const rows = byQueryOrder(ids, res.get("g")?.list);
+  const index = await loadIndex();
+  const self = new Set(index.self);
+  const learned = (index.spamSenders ??= {});
+  const loopStart = Date.parse(sw.loopStartedAt);
+  let indexChanged = false;
+  for (const r of rows) {
+    const c = toCandidate(r, config);
+    if (!c.fromEmail || self.has(c.fromEmail) || c.auth.dmarc === "fail") continue;
+    if (c.spamScore === null || c.spamScore >= config.spamFilterThreshold) continue;
+    const received = Date.parse(c.receivedAt) || now.getTime();
+    const known = learned[c.fromEmail];
+    learned[c.fromEmail] = { seen: now.getTime(), received: Math.max(known?.received ?? 0, received) };
+    indexChanged = true;
+  }
+  sw.position += ids.length;
+  if (ids.length < config.sentPage) {
+    // A full pass: forget senders not seen in it whose mail was recent, or very old.
+    for (const [addr, e] of Object.entries(learned)) {
+      if (e.seen >= loopStart) continue;
+      if (now.getTime() - e.received < SPAM_SENDER_RECENT_MS || now.getTime() - e.seen > SPAM_SENDER_KEEP_MS) {
+        delete learned[addr];
+        indexChanged = true;
+      }
+    }
+    const entries = Object.entries(learned);
+    if (entries.length > MAX_SPAM_SENDERS) {
+      index.spamSenders = Object.fromEntries(entries.sort((x, y) => y[1].seen - x[1].seen).slice(0, MAX_SPAM_SENDERS));
+      indexChanged = true;
+    }
+    sw.position = 0;
+    sw.lastCompleteAt = now.toISOString();
+  }
+  return { job: true, index: indexChanged };
+}
+
 // ---------------------------------------------------------------- digest
 
 async function sendDigest(ctx: Context, job: JobState, now: Date): Promise<DigestReport> {
@@ -673,11 +820,22 @@ async function sendDigest(ctx: Context, job: JobState, now: Date): Promise<Diges
   let pending = job.pending;
   const check = pending.filter((p) => !p.moved).map((p) => p.candidate.id);
   let leftSpam = 0;
+  let readInSpam = 0;
   if (check.length) {
-    const current = (await client.getMany("Email/get", check, ["id", "mailboxIds"])) as { id: string; mailboxIds?: Record<string, boolean> }[];
+    const current = (await client.getMany("Email/get", check, ["id", "mailboxIds", "keywords"])) as {
+      id: string;
+      mailboxIds?: Record<string, boolean>;
+      keywords?: Record<string, boolean>;
+    }[];
     const stillIn = new Set(current.filter((e) => e.mailboxIds?.[junk.id]).map((e) => e.id));
+    // With SPAM_SKIP_READ, a find you've read and left in Spam is one you've judged.
+    const skipRead = config.spamSkipRead && !job.spam.autoRead;
+    const read = new Set(skipRead ? current.filter((e) => e.keywords?.$seen).map((e) => e.id) : []);
     pending = pending.filter((p) => p.moved || stillIn.has(p.candidate.id));
     leftSpam = job.pending.length - pending.length;
+    const before = pending.length;
+    pending = pending.filter((p) => p.moved || !read.has(p.candidate.id));
+    readInSpam = before - pending.length;
   }
 
   // Progress, while the first passes are still running.
@@ -707,6 +865,7 @@ async function sendDigest(ctx: Context, job: JobState, now: Date): Promise<Diges
     backlog,
     indexing: job.sent.historyComplete ? undefined : { indexed: job.sent.historyIndexed, total: job.sent.historyTotal ?? null },
     leftSpam,
+    readInSpam,
     ...(config.incomingMailboxes.length && job.incoming
       ? { incoming: { checked: job.incoming.week.checked, flagged: job.incoming.week.flagged, quarantined: job.incoming.week.quarantined ?? 0 } }
       : {}),
