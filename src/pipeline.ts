@@ -3,7 +3,7 @@ import type { Candidate, Env, RescueResult, Suspect } from "./types.ts";
 import { DETERMINISTIC_BASES } from "./types.ts";
 import { Budget } from "./lib/budget.ts";
 import { JmapClient, type FetchImpl, type Session } from "./jmap/client.ts";
-import { listMailboxes, mailboxPath, resolveMailbox, type Mailbox } from "./jmap/mailboxes.ts";
+import { findMailbox, listMailboxes, mailboxPath, resolveMailbox, type Mailbox } from "./jmap/mailboxes.ts";
 import { emailProperties, toCandidate } from "./jmap/spam.ts";
 import { threadsWithRealMail, threadsWithYourMail } from "./jmap/threads.ts";
 import { FASTSPAM_HEADER } from "./jmap/append.ts";
@@ -753,14 +753,7 @@ async function sendDigest(ctx: Context, job: JobState, now: Date): Promise<Diges
 
 /** INCOMING_MAILBOXES resolved. "Parent.Child" works as well as "Parent/Child". */
 export function incomingMailboxes(specs: string[], all: Mailbox[], junkId: string): Mailbox[] {
-  const found = specs.map((spec) => {
-    try {
-      return resolveMailbox(all, { label: "INCOMING_MAILBOXES", override: spec, required: true })!;
-    } catch (err) {
-      if (!spec.includes(".")) throw err;
-      return resolveMailbox(all, { label: "INCOMING_MAILBOXES", override: spec.replace(/\./g, "/"), required: true })!;
-    }
-  });
+  const found = specs.map((spec) => findMailbox(all, spec, "INCOMING_MAILBOXES"));
   if (found.some((m) => m.id === junkId)) throw new Error("INCOMING_MAILBOXES must not include Spam: Spam is reviewed separately");
   return [...new Map(found.map((m) => [m.id, m])).values()];
 }
@@ -1080,7 +1073,7 @@ export function makeNotifier(env: Env, config: Config, opts: RunOptions, budget:
   if (opts.notifier) return opts.notifier;
   if (config.dryRun) return new ConsoleNotifier();
   if (config.notifier === "fastmail") {
-    return new FastmailNotifier(writeClient(env, config, opts, budget), config.emailFrom, config.emailTo);
+    return new FastmailNotifier(writeClient(env, config, opts, budget), config.emailFrom, config.emailTo, config.digestMailbox);
   }
   if (!config.emailFrom || !config.emailTo.length) throw new Error("EMAIL_FROM and EMAIL_TO must be set (or set DRY_RUN=true)");
   if (config.notifier === "postmark") {

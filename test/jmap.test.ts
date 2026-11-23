@@ -6,7 +6,7 @@ import { threadsWithRealMail } from "../src/jmap/threads.ts";
 import { applySent, emptyIndex, isReply, lookup, SENT_PROPERTIES, type SentRow } from "../src/jmap/correspondents.ts";
 import { rescue } from "../src/jmap/rescue.ts";
 import { isFreemail } from "../src/lib/freemail.ts";
-import { appendToInbox } from "../src/jmap/append.ts";
+import { appendDigest } from "../src/jmap/append.ts";
 import { Budget } from "../src/lib/budget.ts";
 import { FakeJmap, MAILBOXES, sentEmail, sentReply, spamEmail } from "./helpers.ts";
 
@@ -235,12 +235,26 @@ describe("rescue (the one write)", () => {
 describe("digest append", () => {
   it("creates the digest in the Inbox as plain text", async () => {
     const fake = new FakeJmap();
-    await appendToInbox(client(fake, "write-token"), { subject: "S", text: "T", from: "f@owner.example", to: [] });
+    await appendDigest(client(fake, "write-token"), { subject: "S", text: "T", from: "f@owner.example", to: [] });
     expect(fake.created[0]).toMatchObject({
       mailboxIds: { "mb-inbox": true },
       subject: "S",
       bodyValues: { body: { value: "T" } },
       textBody: [{ partId: "body", type: "text/plain" }],
     });
+  });
+  it("files it in DIGEST_MAILBOX, by name or path with / or .", async () => {
+    const mailboxes = [...MAILBOXES, { id: "mb-lists", name: "Lists", role: null, parentId: null }, { id: "mb-fs", name: "fastspam", role: null, parentId: "mb-lists" }];
+    for (const spec of ["Lists/fastspam", "Lists.fastspam", "fastspam"]) {
+      const fake = new FakeJmap({ mailboxes });
+      await appendDigest(client(fake, "write-token"), { subject: "S", text: "T", from: "", to: [] }, { mailbox: spec });
+      expect(fake.created[0]).toMatchObject({ mailboxIds: { "mb-fs": true }, bodyValues: { body: { value: "T" } } });
+    }
+  });
+  it("falls back to the Inbox, saying so, when DIGEST_MAILBOX isn't found", async () => {
+    const fake = new FakeJmap();
+    await appendDigest(client(fake, "write-token"), { subject: "S", text: "T", from: "", to: [] }, { mailbox: "Renamed" });
+    expect(fake.created[0]).toMatchObject({ mailboxIds: { "mb-inbox": true } });
+    expect((fake.created[0] as { bodyValues: { body: { value: string } } }).bodyValues.body.value).toMatch(/^\(DIGEST_MAILBOX "Renamed" wasn't found/);
   });
 });

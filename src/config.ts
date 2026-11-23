@@ -19,6 +19,8 @@ export interface Config {
   spamMailbox: string;
   sentMailbox: string;
   rescueMailbox: string;
+  /** Where the Fastmail notifier files digests, reports and alerts. Empty = the Inbox. */
+  digestMailbox: string;
 
   /** When the digest goes out: weekdays (0 = Sunday) at DIGEST_HOUR, in TIMEZONE. */
   digestDays: number[];
@@ -172,6 +174,7 @@ export function loadConfig(env: Env): Config {
     spamMailbox: str(env.SPAM_MAILBOX),
     sentMailbox: str(env.SENT_MAILBOX),
     rescueMailbox: str(env.RESCUE_MAILBOX),
+    digestMailbox: str(env.DIGEST_MAILBOX),
 
     digestDays: digestDays(env.DIGEST_DAYS),
     digestHour: clamp(Math.floor(num(env.DIGEST_HOUR, 20)), 0, 23),

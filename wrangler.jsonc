@@ -85,6 +85,9 @@
     "INCOMING_THRESHOLD": "0.7",
     "INCOMING_REPORT_MINUTES": "60",
 
+    // NOTIFIER=fastmail only: the folder digests, reports and alerts are filed
+    // in (name or path). Empty = the Inbox. Fastmail rules don't run on them.
+    "DIGEST_MAILBOX": "",
     // The Fastmail web app that digest links open in, e.g. https://app.beta.fastmail.com.
     "FASTMAIL_URL": "https://app.fastmail.com",
     "SEND_WHEN_EMPTY": "true",

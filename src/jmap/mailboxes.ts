@@ -32,6 +32,19 @@ export function mailboxPath(m: Mailbox, all: Mailbox[]): string {
 }
 
 /**
+ * A mailbox named in a setting: id, name or path, with "." accepted between
+ * levels as well as "/" (so "Parent.Child" works).
+ */
+export function findMailbox(all: Mailbox[], spec: string, label: string): Mailbox {
+  try {
+    return resolveMailbox(all, { label, override: spec, required: true })!;
+  } catch (err) {
+    if (!spec.includes(".")) throw err;
+    return resolveMailbox(all, { label, override: spec.replace(/\./g, "/"), required: true })!;
+  }
+}
+
+/**
  * Resolve a mailbox: explicit override (id, name or path) → role → name pattern.
  * RFC 8621 defers role names to the IANA registry, so the name fallback is not
  * optional politeness: servers differ.

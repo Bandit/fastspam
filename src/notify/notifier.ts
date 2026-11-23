@@ -1,5 +1,5 @@
 import type { JmapClient } from "../jmap/client.ts";
-import { appendToInbox } from "../jmap/append.ts";
+import { appendDigest } from "../jmap/append.ts";
 
 /** A rendered digest, independent of transport. Plain text only. */
 export interface Message {
@@ -28,13 +28,16 @@ export class FastmailNotifier implements Notifier {
   private readonly client: JmapClient;
   private readonly from: string;
   private readonly to: string[];
-  constructor(client: JmapClient, from: string, to: string[]) {
+  private readonly mailbox: string;
+  /** `mailbox`: DIGEST_MAILBOX; empty = the Inbox. */
+  constructor(client: JmapClient, from: string, to: string[], mailbox = "") {
     this.client = client;
     this.from = from;
     this.to = to;
+    this.mailbox = mailbox;
   }
   async send(msg: Message): Promise<void> {
-    await appendToInbox(this.client, { ...msg, from: this.from, to: this.to });
+    await appendDigest(this.client, { ...msg, from: this.from, to: this.to }, { mailbox: this.mailbox });
   }
 }
 

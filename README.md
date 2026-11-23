@@ -252,6 +252,12 @@ Set `NOTIFIER` in `wrangler.jsonc` to one of these:
   npx wrangler secret put FASTMAIL_WRITE_TOKEN
   ```
   `EMAIL_FROM` (shown as the sender) and `EMAIL_TO` are optional for this notifier.
+
+  Because the digest is created rather than delivered, **your Fastmail rules don't run on it**.
+  To file it somewhere other than the Inbox, set `DIGEST_MAILBOX` to a folder name or path
+  (for example `Lists/fastspam`). Incoming reports and alerts go there too. If the folder
+  can't be found, they go to the Inbox with a note saying so. The `postmark` and `cloudflare`
+  notifiers send real email, so your rules do apply to them.
 - **`postmark`**. Needs a [Postmark](https://postmarkapp.com) server token and a confirmed
   sender. This keeps fastspam's access to Fastmail read-only.
   ```bash
@@ -411,6 +417,7 @@ These go in `vars` in `wrangler.jsonc`.
 | `SPAM_SCORE_SKIP_ABOVE` | empty | drop messages scoring above this without asking the model |
 | `SPAM_HEADERS` | `X-Spam-score` | headers checked for a spam score |
 | `SPAM_MAILBOX` / `SENT_MAILBOX` | auto | mailbox name, path or id, if auto-detection fails |
+| `DIGEST_MAILBOX` | empty | folder the `fastmail` notifier files digests, reports and alerts in; empty = the Inbox |
 | `RESCUE_MAILBOX` | empty | see [Rescuing](#rescuing-optional) |
 | `RESCUE_BASIS` | `deterministic` | `deterministic` or `all` |
 | `MAX_RESCUES_PER_DIGEST` | `20` | most messages moved between two digests |
