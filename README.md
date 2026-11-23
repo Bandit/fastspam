@@ -887,7 +887,9 @@ npm run dev
 The tests run against an in-memory JMAP server (`test/helpers.ts`) that implements the parts
 of RFC 8620/8621 fastspam uses, including server limits and back-references. They also use a
 fake AI binding that answers in each model's own response format. `test/privacy.test.ts` fails
-the build if any committed file contains an email address outside the reserved example domains.
+the build if any committed file contains an email address outside the reserved example domains,
+or, on a machine with a `.dev.vars`, any of its tokens, addresses, folder names or timezone.
+Contributors and coding agents: see [AGENTS.md](AGENTS.md) for what must never be committed.
 
 Layout:
 
