@@ -85,6 +85,13 @@ const MAX_PENDING = 500;
 const INCOMING_SLICE = 40;
 const MAX_INCOMING_PENDING = 100;
 /**
+ * Once something has been quarantined, the report waits only this long after
+ * the last one (or INCOMING_REPORT_MINUTES, if shorter): real mail moved out
+ * of your inbox shouldn't stay unmentioned for an hour. MAX_QUARANTINE_PER_DAY
+ * bounds how many reports that can cause.
+ */
+const QUARANTINE_REPORT_MS = 15 * MINUTE;
+/**
  * An alert goes out once work runs have kept hitting a problem for this long
  * (and on at least two runs), whatever the cron interval.
  */
@@ -238,14 +245,17 @@ export function digestTiming(job: JobState, config: Config, now: Date): { due: b
 
 /**
  * Whether this run should send the incoming report: something was found, and
- * the last report (if any) was at least INCOMING_REPORT_MINUTES ago.
+ * the last report (if any) was at least INCOMING_REPORT_MINUTES ago, or
+ * QUARANTINE_REPORT_MS if something has been quarantined.
  */
 export function incomingReportDue(job: JobState, config: Config, now: Date): boolean {
   const inc = job.incoming;
   if (!config.incomingMailboxes.length || !inc?.pending.length) return false;
   const failedAt = inc.reportFailedAt ? Date.parse(inc.reportFailedAt) : NaN;
   if (Number.isFinite(failedAt) && now.getTime() - failedAt < DIGEST_RETRY_MS) return false;
-  return !inc.lastReportAt || now.getTime() - Date.parse(inc.lastReportAt) >= config.incomingReportMinutes * MINUTE;
+  const wait = config.incomingReportMinutes * MINUTE;
+  const gap = inc.pending.some((p) => p.movedTo) ? Math.min(wait, QUARANTINE_REPORT_MS) : wait;
+  return !inc.lastReportAt || now.getTime() - Date.parse(inc.lastReportAt) >= gap;
 }
 
 /** Whether work runs have kept failing long enough to alert, and no alert went out for it today. */

@@ -401,7 +401,8 @@ but leaves less headroom. Each run does one thing:
   the weekly digest. A one-off, which the next run usually retries successfully, doesn't alert.
   While the problem lasts, the alert repeats at most daily.
 - **If the [incoming check](#checking-incoming-mail) found something**, and the last
-  incoming report was at least `INCOMING_REPORT_MINUTES` ago, it sends the incoming report.
+  incoming report was at least `INCOMING_REPORT_MINUTES` ago, it sends the incoming report. If
+  something was quarantined, 15 minutes since the last report is enough.
 - **Otherwise it does one small slice of work**, sized to fit the Workers Free CPU limit:
   1. **Indexing Sent, newest first, `SENT_PAGE` (200) messages per run**, until all of it is
      indexed. Nothing in Spam is reviewed until then, because a message reviewed early would
@@ -500,7 +501,7 @@ These go in `vars` in `wrangler.jsonc`.
 | `INCOMING_MAILBOXES` | empty | folders to check for spam that got through; see [Checking incoming mail](#checking-incoming-mail) |
 | `INCOMING_SKIP_READ` | `false` | don't check messages already marked read |
 | `INCOMING_THRESHOLD` | `0.7` | minimum P(spam) for the model to flag an incoming message |
-| `INCOMING_REPORT_MINUTES` | `60` | at most one incoming report per this many minutes |
+| `INCOMING_REPORT_MINUTES` | `60` | at most one incoming report per this many minutes (15 once something is quarantined) |
 | `QUARANTINE_MAILBOX` | empty | move flagged incoming mail here; see [Quarantine](#quarantine-optional) |
 | `QUARANTINE_THRESHOLD` | `0.9` | minimum P(spam) for a model verdict to move mail; facts always do |
 | `MAX_QUARANTINE_PER_DAY` | `20` | most messages quarantined per day (UTC) |
@@ -589,7 +590,9 @@ appear in the digest, but they never move mail unless you set `RESCUE_BASIS=all`
 
 The Spam review in reverse: look at new mail that *reached* your folders for spam, scams and
 phishing the filter missed, and email you a short report, at most every
-`INCOMING_REPORT_MINUTES` (60), when it finds any. It's off until you name the folders:
+`INCOMING_REPORT_MINUTES` (60), when it finds any. When it has quarantined something, the
+report goes out within 15 minutes of the last one, so real mail moved out of your inbox doesn't
+go unmentioned for long. It's off until you name the folders:
 
 ```
 INCOMING_MAILBOXES=Inbox, Lists/Newsletters

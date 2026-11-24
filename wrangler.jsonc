@@ -87,7 +87,8 @@
     "MAX_RESCUES_PER_DIGEST": "20",
 
     // Also check these folders for spam, scams and phishing the filter let
-    // through, and report finds at most every INCOMING_REPORT_MINUTES.
+    // through, and report finds at most every INCOMING_REPORT_MINUTES (15 minutes
+    // once something has been quarantined).
     // Empty = off (README "Checking incoming mail").
     "INCOMING_MAILBOXES": "",
     "INCOMING_SKIP_READ": "false",

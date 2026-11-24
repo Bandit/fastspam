@@ -308,6 +308,22 @@ describe("quarantine", () => {
     expect(await s.go(35)).toMatchObject({ kind: "incoming-report", sent: false, dealtWith: 1 });
   });
 
+  it("reports quarantined mail 15 minutes after the last report, not an hour", async () => {
+    const s = qsetup();
+    await started(s);
+    s.fake.emails.push(arriving(1, "a@scam.example", "Account suspended")); // flagged, left in place
+    await s.go(5);
+    expect((await s.go(10)).kind).toBe("incoming-report");
+    s.fake.emails.push(arriving(11, "b@scam.example", "Account suspended again"));
+    expect(((await s.go(15)) as WorkReport).incoming).toMatchObject({ flagged: 1, quarantined: 0 });
+    s.fake.emails.push(arriving(16, "c@scam.example", "Verify your account"));
+    expect(((await s.go(20)) as WorkReport).incoming).toMatchObject({ flagged: 1, quarantined: 1 });
+    expect((await s.go(24)).kind).toBe("work");
+    // The flagged one alone would wait until 70; the quarantined one brings it forward.
+    expect(await s.go(25)).toMatchObject({ kind: "incoming-report", sent: true, listed: 2 });
+    expect(s.notifier.sent[1]!.subject).toMatch(/2 possible spam in your mail, 1 quarantined/);
+  });
+
   it("records a failure and still reports when the write token is missing", async () => {
     const s = qsetup({ FASTMAIL_WRITE_TOKEN: "" });
     await started(s);
