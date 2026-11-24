@@ -17,7 +17,9 @@ after it is deleted from a file, so the time to catch it is before the commit.
   Gateway ids.
 - Cloudflare account ids, KV namespace ids, workers.dev subdomains and deployment ids.
 - Real mail: subjects, senders, previews, headers, Message-IDs, JMAP email or thread ids,
-  screenshots, and anecdotes or counts about a specific mailbox ("my Spam folder had…").
+  screenshots, and anecdotes that identify the maintainer or their correspondents. Aggregate
+  figures with no identifying detail (evaluation scores, "about one message in ten reached the
+  model") are fine.
 - Anything from `eval-private/` or `eval-results/`. Both are gitignored. Only aggregate scores
   go in the README.
 

@@ -66,6 +66,15 @@ const DAY = 86_400_000;
  * the lag, a late arrival older than the saved position would be skipped.
  */
 const SETTLE_MS = 10 * MINUTE;
+/**
+ * The incoming check waits less: Fastmail filters and files a message before
+ * it becomes visible, so this only allows for a slow delivery. It also
+ * re-reads INCOMING_LOOKBACK_MS behind its position each run, skipping ids it
+ * has checked, so a message that becomes visible later than that is still
+ * checked rather than skipped.
+ */
+const INCOMING_SETTLE_MS = 1 * MINUTE;
+const INCOMING_LOOKBACK_MS = 15 * MINUTE;
 /** The position is a receivedAt; re-read a second either side of it in case the server's `after` is strict. */
 const EDGE_MS = 1000;
 /** Subrequests a slice needs beyond the model: one query, two for threads, two KV writes, a rescue. */
@@ -75,8 +84,12 @@ const MAX_PENDING = 500;
 /** Incoming messages checked per run, and finds kept for the next incoming report. */
 const INCOMING_SLICE = 40;
 const MAX_INCOMING_PENDING = 100;
-/** Work runs in a row with a problem before an alert goes out (45 minutes at the default cron). */
-const ALERT_AFTER_RUNS = 3;
+/**
+ * An alert goes out once work runs have kept hitting a problem for this long
+ * (and on at least two runs), whatever the cron interval.
+ */
+const ALERT_AFTER_MS = 45 * MINUTE;
+const ALERT_MIN_RUNS = 2;
 /** While the problem lasts, the alert repeats at most this often. */
 const ALERT_REPEAT_MS = 24 * 60 * MINUTE;
 /** A full pass of the Spam sweep starts at most this often. */
@@ -238,7 +251,7 @@ export function incomingReportDue(job: JobState, config: Config, now: Date): boo
 /** Whether work runs have kept failing long enough to alert, and no alert went out for it today. */
 export function alertDue(job: JobState, now: Date): boolean {
   const streak = job.failStreak;
-  if (!streak || streak.runs < ALERT_AFTER_RUNS) return false;
+  if (!streak || streak.runs < ALERT_MIN_RUNS || now.getTime() - Date.parse(streak.since) < ALERT_AFTER_MS) return false;
   return !streak.alertedAt || now.getTime() - Date.parse(streak.alertedAt) >= ALERT_REPEAT_MS;
 }
 
@@ -925,6 +938,8 @@ function newIncoming(key: string, cursor: string, now: Date, previous?: Incoming
     key,
     cursor,
     edge: [],
+    recent: [],
+    lookbackFloor: cursor,
     pending: previous?.pending ?? [],
     periodStart: now.toISOString(),
     ...(previous?.lastReportAt ? { lastReportAt: previous.lastReportAt } : {}),
@@ -950,16 +965,26 @@ async function checkIncoming(
   const { config, client, budget, env } = ctx;
   const folders = incomingMailboxes(config.incomingMailboxes, b.mailboxes, b.junk.id);
   const key = JSON.stringify([folders.map((m) => m.id).sort(), config.incomingSkipRead]);
-  const settled = new Date(now.getTime() - SETTLE_MS).toISOString();
+  const settled = new Date(now.getTime() - INCOMING_SETTLE_MS).toISOString();
   if (job.incoming?.key !== key) {
     job.incoming = newIncoming(key, settled, now, job.incoming);
     return true;
   }
   const inc = job.incoming;
-  const limit = INCOMING_SLICE + inc.edge.length;
+  // Nothing before the floor was recorded in `recent` (it is where checking
+  // started, or where state saved before the look-back existed left off), so
+  // the look-back never reaches behind it.
+  let changed = false;
+  if (!inc.lookbackFloor) {
+    inc.lookbackFloor = inc.cursor;
+    changed = true;
+  }
+  const from = new Date(Math.max(Date.parse(inc.cursor) - INCOMING_LOOKBACK_MS, Date.parse(inc.lookbackFloor) - EDGE_MS)).toISOString();
+  const skip = new Set([...inc.edge, ...(inc.recent ?? [])].map((e) => e.id));
+  const limit = INCOMING_SLICE + skip.size;
   const conditions: unknown[] = [
     folders.length === 1 ? { inMailbox: folders[0]!.id } : { operator: "OR", conditions: folders.map((m) => ({ inMailbox: m.id })) },
-    { after: afterFilter(inc.cursor), before: settled },
+    { after: from, before: settled },
   ];
   if (config.incomingSkipRead) conditions.push({ notKeyword: "$seen" });
   const res = await client.request([
@@ -987,9 +1012,8 @@ async function checkIncoming(
       "ig",
     ],
   ]);
-  const edgeIds = new Set(inc.edge.map((e) => e.id));
-  const rows = byQueryOrder(res.get("iq")?.ids, res.get("ig")?.list).filter((r) => !edgeIds.has(String(r.id)));
-  if (!rows.length) return false;
+  const rows = byQueryOrder(res.get("iq")?.ids, res.get("ig")?.list).filter((r) => !skip.has(String(r.id)));
+  if (!rows.length) return pruneRecent(inc) || changed;
 
   // fastspam's own reports: the Fastmail notifier marks them; the others are
   // recognised by sender and subject.
@@ -1088,14 +1112,29 @@ async function checkIncoming(
     if (pendingIds.has(f.candidate.id) || inc.pending.length >= MAX_INCOMING_PENDING) continue;
     inc.pending.push(f);
   }
+  // A late arrival is older than the position: it is remembered, but never
+  // moves the position back.
+  const position = Date.parse(inc.cursor);
   const moved = advance(
-    processed.map((x) => ({ id: x.c.id, receivedAt: x.c.receivedAt })),
+    processed.filter((x) => Date.parse(x.c.receivedAt) >= position).map((x) => ({ id: x.c.id, receivedAt: x.c.receivedAt })),
     inc.cursor,
     inc.edge,
   );
   inc.cursor = moved.cursor ?? inc.cursor;
   inc.edge = moved.edge;
+  inc.recent = [...(inc.recent ?? []), ...processed.map((x) => ({ id: x.c.id, at: x.c.receivedAt }))];
+  pruneRecent(inc);
   return true;
+}
+
+/** Keep only the ids the next look-back can return. Returns whether anything changed. */
+function pruneRecent(inc: IncomingState): boolean {
+  const floor = Date.parse(inc.cursor) - INCOMING_LOOKBACK_MS - EDGE_MS;
+  const seen = new Set<string>();
+  const kept = (inc.recent ?? []).filter((e) => Date.parse(e.at) >= floor && !seen.has(e.id) && (seen.add(e.id), true));
+  const changed = kept.length !== (inc.recent ?? []).length;
+  if (changed) inc.recent = kept;
+  return changed;
 }
 
 /**

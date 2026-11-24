@@ -10,6 +10,7 @@
     // Every 15 minutes. Each run sends the digest if one is due (DIGEST_DAYS
     // and DIGEST_HOUR below) and otherwise does one small slice of work, which
     // keeps every run inside the Workers Free CPU limit (README "Schedule").
+    // CRON in .dev.vars replaces this for npm run deploy.
     "crons": ["*/15 * * * *"]
   },
   "ai": {

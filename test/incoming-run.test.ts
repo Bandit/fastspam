@@ -56,7 +56,7 @@ function jobOf(env: Env): JobState {
 /** Index Sent, catch up on (empty) Spam and start the incoming position at T0. */
 async function started(s: ReturnType<typeof setup>) {
   for (let i = 0; i < 5; i++) await s.go(0);
-  expect(jobOf(s.env).incoming?.cursor).toBe(at(-10).toISOString());
+  expect(jobOf(s.env).incoming?.cursor).toBe(at(-1).toISOString());
 }
 
 describe("incoming check", () => {
@@ -185,6 +185,41 @@ describe("incoming check", () => {
     const d = await digest(s.env, at(30), { fetchImpl: s.fake.fetch, notifier: s.notifier, ...quiet });
     expect(d.message!.text).toContain("Incoming check: 2 new messages checked, 1 flagged");
     expect(jobOf(s.env).incoming!.week).toMatchObject({ checked: 0, flagged: 0 });
+  });
+
+  it("checks a message that becomes visible after the position has passed it, once", async () => {
+    const s = setup();
+    await started(s);
+    s.fake.emails.push(arriving(1, "news@letters.example", "Gardening"), arriving(6, "friend@client.example", "Hi"));
+    expect(((await s.go(10)) as WorkReport).incoming).toMatchObject({ checked: 2, flagged: 0 });
+    // Stamped 4 minutes in, but only visible now, after the position reached 6.
+    s.fake.emails.push(arriving(4, "b@scam.example", "Account suspended"));
+    expect(((await s.go(15)) as WorkReport).incoming).toMatchObject({ checked: 1, flagged: 1 });
+    expect(jobOf(s.env).incoming!.cursor).toBe(at(6).toISOString());
+    // Nothing is checked twice while it stays inside the look-back.
+    expect(((await s.go(20)) as WorkReport).incoming).toBeUndefined();
+    expect(s.ai.calls).toHaveLength(2);
+    // Past the look-back, the record of it is dropped.
+    s.fake.emails.push(arriving(40, "friend@client.example", "Later"));
+    await s.go(45);
+    expect(jobOf(s.env).incoming!.recent!.map((e) => e.at)).toEqual([at(40).toISOString()]);
+  });
+
+  it("doesn't look back past where state saved before the look-back left off", async () => {
+    const s = setup();
+    await started(s);
+    s.fake.emails.push(arriving(1, "news@letters.example", "Gardening"));
+    await s.go(10);
+    expect(s.ai.calls).toHaveLength(1);
+    // As saved by the previous version: no record of what it checked.
+    const kv = s.env.FASTSPAM_STATE as unknown as MemoryKV;
+    const job = jobOf(s.env);
+    delete job.incoming!.recent;
+    delete job.incoming!.lookbackFloor;
+    kv.store.set("job", JSON.stringify(job));
+    s.fake.emails.push(arriving(8, "b@scam.example", "Account suspended"));
+    expect(((await s.go(20)) as WorkReport).incoming).toMatchObject({ checked: 1 });
+    expect(jobOf(s.env).incoming!.lookbackFloor).toBe(at(1).toISOString());
   });
 });
 

@@ -106,6 +106,14 @@ export interface IncomingState {
   /** receivedAt of the newest message checked (ISO). */
   cursor: string;
   edge: Edge[];
+  /**
+   * Ids checked with a receivedAt within the look-back behind the position,
+   * so re-reading that window skips them. Unset in state saved before the
+   * look-back existed.
+   */
+  recent?: Edge[];
+  /** The look-back never reaches behind this (ISO): `recent` holds nothing older. */
+  lookbackFloor?: string;
   pending: IncomingFind[];
   /** Start of the period the next incoming report covers. */
   periodStart: string;

@@ -10,6 +10,11 @@
  * plain var it would be visible in the dashboard. Set those once with
  * `npx wrangler secret put NAME`.
  *
+ * CRON in .dev.vars replaces the schedule (triggers.crons), for example to
+ * run every 5 minutes on Workers Paid (see .dev.vars.example). wrangler has no
+ * flag for that, so the deploy uses a copy of wrangler.jsonc with it applied
+ * (wrangler.deploy.json, git-ignored, removed afterwards).
+ *
  * DRY_RUN is never taken from .dev.vars, so a local DRY_RUN=true can't switch
  * production off. Extra arguments are passed through to wrangler:
  *
@@ -17,6 +22,7 @@
  *   npm run deploy -- --dry-run --outdir dist
  */
 import { spawnSync } from "node:child_process";
+import { rmSync, writeFileSync } from "node:fs";
 import { experimental_readRawConfig } from "wrangler";
 import { parseDevVars } from "./env.mjs";
 
@@ -37,6 +43,19 @@ if (overrides.length) {
 }
 if (ignored.length) console.log(`Not applied (local only): ${ignored.join(", ")}`);
 
-const args = ["wrangler", "deploy", ...overrides.flatMap(([k, v]) => ["--var", `${k}:${v}`]), ...process.argv.slice(2)];
+let config = "wrangler.jsonc";
+const cron = local.CRON?.trim();
+if (cron) {
+  if (cron.split(/\s+/).length !== 5) {
+    console.error(`CRON in .dev.vars must be a 5-field cron expression, got "${cron}"`);
+    process.exit(1);
+  }
+  console.log(`Schedule from .dev.vars: ${cron}`);
+  config = "wrangler.deploy.json";
+  writeFileSync(config, JSON.stringify({ ...rawConfig, triggers: { ...rawConfig.triggers, crons: [cron] } }, null, 2));
+}
+
+const args = ["wrangler", "deploy", "--config", config, ...overrides.flatMap(([k, v]) => ["--var", `${k}:${v}`]), ...process.argv.slice(2)];
 const result = spawnSync("npx", args, { stdio: "inherit" });
+if (config !== "wrangler.jsonc") rmSync(config, { force: true });
 process.exit(result.status ?? 1);

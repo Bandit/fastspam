@@ -12,6 +12,8 @@ EMAIL_TO=you@example.com
 # TIMEZONE=Europe/London
 # FASTMAIL_URL=https://app.beta.fastmail.com
 # DIGEST_MAILBOX=Lists/fastspam
+# CRON replaces the schedule in wrangler.jsonc (every 15 minutes) for npm run deploy:
+# CRON=*/5 * * * *
 # Uncomment for local runs. Commented out so the Deploy to Cloudflare button
 # doesn't create a DRY_RUN secret that clashes with the DRY_RUN var.
 # DRY_RUN=true

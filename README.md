@@ -1,7 +1,7 @@
 # fastspam
 
 Fastmail's spam filter is good, but it gets things wrong both ways. fastspam is a Cloudflare
-Worker that checks both, every 15 minutes:
+Worker that checks both, every 15 minutes (or every 5, if you like):
 
 - **Real mail in Spam.** Now and then a receipt, a reply from someone new, or a sign-in code
   lands in Spam, and Spam is deleted automatically after 30 days (Fastmail's default; you can
@@ -229,7 +229,7 @@ fastspam costs a few cents a month. The Workers plan matters more than the model
 - AI Gateway is free.
 
 **The model.** You pay per input token; output is free. Gemini reported about 400 tokens per
-message plus about 430 per call (the instructions). Each 15-minute run makes at most one call
+message plus about 430 per call (the instructions). Each run makes at most one call
 for Spam and one for incoming mail, so at low volumes most calls carry one or two messages, and
 each costs a little more. Rough monthly figures, assuming one incoming message in five
 reaches the model (it was one in ten on the author's mail):
@@ -385,14 +385,18 @@ example `Europe/London`) so the digest goes out at your local time and shows loc
 
 ### Schedule
 
-One cron runs every 15 minutes (`*/15 * * * *` in `wrangler.jsonc`). Each run does one thing:
+One cron runs every 15 minutes (`*/15 * * * *` in `wrangler.jsonc`). To run more often, set
+`CRON` in `.dev.vars` (for example `CRON=*/5 * * * *`) and `npm run deploy` uses it instead.
+Every 5 minutes means incoming spam is quarantined within a few minutes of arriving rather than
+up to 15. It is fine on Workers Paid; on Workers Free it still fits the KV write limit (below),
+but leaves less headroom. Each run does one thing:
 
 - **If a digest is due, it sends the digest.** The digest goes out at `DIGEST_HOUR` (20) on
   `DIGEST_DAYS` (`mon`) in `TIMEZONE`. Because this is worked out in code rather than by cron
   (which only knows UTC), the time stays put across daylight-saving changes. A run that misses
   the time, or fails to send, is caught up by a later run; a failed send is retried at most
   hourly. A new installation sends its first digest at the first digest time after it starts.
-- **If the last three runs of work all hit a problem, it sends an alert** listing the problems,
+- **If work has kept hitting a problem for 45 minutes, it sends an alert** listing the problems,
   so something lasting (a revoked token, a model that keeps refusing a message) doesn't wait for
   the weekly digest. A one-off, which the next run usually retries successfully, doesn't alert.
   While the problem lasts, the alert repeats at most daily.
@@ -606,7 +610,8 @@ Folders are names or paths, with `/` or `.` between levels. Spam can't be one of
 - **Flagged when the model is confident.** P(spam) at or above `INCOMING_THRESHOLD` (0.7).
   Most incoming mail is legitimate, so the bar is higher than for the Spam review.
 - **New mail only.** It starts with mail arriving after you turn it on, and checks each message
-  once, a few minutes after it arrives (the same settling delay as the Spam review).
+  once, from a minute after it arrives. Each run also looks back 15 minutes for anything that
+  became visible late, skipping what it has already checked.
 - **`INCOMING_SKIP_READ=true`** leaves out mail you've already read, on the basis that if you
   read it and didn't mark it as spam, you've judged it. A find you read, move or delete before
   the report goes out is left out of the report too.
@@ -796,7 +801,8 @@ any of them is reliable.
   runs out, the slice stops at the first message the model couldn't answer, and the next run
   starts again from there.
 - **Workers Free allows 1,000 KV writes a day.** A run writes at most two values, and a run with
-  nothing to do writes none, so a 15-minute schedule uses at most about 200.
+  nothing to do writes none, so a 15-minute schedule uses at most about 200, and a 5-minute one
+  about 600.
 
 ## Privacy: what goes where
 

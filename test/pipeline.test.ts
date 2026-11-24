@@ -460,6 +460,13 @@ describe("alerts about repeated failures", () => {
     expect(notifier.sent).toHaveLength(1);
   });
 
+  it("waits for 45 minutes of failures, however often it runs", async () => {
+    const { go, notifier } = await failing();
+    for (let m = 5; m <= 45; m += 5) expect((await go(m)).kind).toBe("work");
+    expect(notifier.sent).toHaveLength(0);
+    expect(await go(50)).toMatchObject({ kind: "alert", runs: 9 });
+  });
+
   it("doesn't alert about a one-off, and a clean run starts the count again", async () => {
     const { env, ai, go, notifier } = await failing();
     await go(15);
